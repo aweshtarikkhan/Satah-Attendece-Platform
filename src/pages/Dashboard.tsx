@@ -125,21 +125,26 @@ export default function Dashboard({ session }: { session: any }) {
       const now = new Date().toISOString();
 
       if (type === 'in') {
-        const { error } = await supabase.from('attendances').insert({
+        const { error } = await supabase.from('attendances').upsert({
           org_id: employee.org_id,
           employee_id: employee.id,
           date: todayStr,
-          clock_in_time: now,
-          clock_in_location: location,
+          clock_in_time: todayRecord?.clock_in_time || now,
+          clock_in_location: todayRecord?.clock_in_location || location,
           status: 'present'
-        });
+        }, { onConflict: 'employee_id,date' });
         if (error) throw error;
         toast({ title: "Clocked In", description: "Your attendance has been recorded." });
       } else {
-        const { error } = await supabase.from('attendances').update({
+        const { error } = await supabase.from('attendances').upsert({
+          org_id: employee.org_id,
+          employee_id: employee.id,
+          date: todayStr,
+          ...(todayRecord || {}),
           clock_out_time: now,
-          clock_out_location: location
-        }).eq('id', todayRecord.id);
+          clock_out_location: location,
+          status: 'present'
+        }, { onConflict: 'employee_id,date' });
         if (error) throw error;
         toast({ title: "Clocked Out", description: "Have a great rest of your day!" });
       }
