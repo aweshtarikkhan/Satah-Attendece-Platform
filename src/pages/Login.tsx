@@ -28,19 +28,19 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-muted/40 p-4">
-      <Card className="w-full max-w-md shadow-lg border-primary/10">
+    <div className="min-h-screen flex items-center justify-center bg-muted/40 dark:bg-slate-900 p-4 transition-colors">
+      <Card className="w-full max-w-md shadow-lg border-primary/10 dark:border-slate-800 dark:bg-slate-800 transition-colors">
         <CardHeader className="text-center pb-8">
-          <div className="mx-auto w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mb-4">
-            <Building2 className="w-6 h-6 text-primary" />
+          <div className="mx-auto w-12 h-12 bg-primary/10 dark:bg-blue-900/30 rounded-full flex items-center justify-center mb-4">
+            <Building2 className="w-6 h-6 text-primary dark:text-blue-400" />
           </div>
-          <CardTitle className="text-2xl font-bold">Employee Portal</CardTitle>
-          <CardDescription>Sign in to manage your attendance</CardDescription>
+          <CardTitle className="text-2xl font-bold dark:text-white">Employee Portal</CardTitle>
+          <CardDescription className="dark:text-slate-400">Sign in to manage your attendance</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="email">Email address</Label>
+              <Label htmlFor="email" className="dark:text-slate-300">Email address</Label>
               <Input
                 id="email"
                 type="email"
@@ -48,16 +48,18 @@ export default function Login() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
+                className="dark:bg-slate-900 dark:border-slate-700 dark:text-white dark:placeholder-slate-500"
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password" className="dark:text-slate-300">Password</Label>
               <Input
                 id="password"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
+                className="dark:bg-slate-900 dark:border-slate-700 dark:text-white"
               />
             </div>
             <Button type="submit" className="w-full" disabled={loading}>

@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import HistoryPage from './pages/HistoryPage';
 import LeaveManagementPage from './pages/LeaveManagementPage';
 import HolidaysPage from './pages/HolidaysPage';
+import ChatPage from './pages/ChatPage';
 import DashboardLayout from './components/layout/DashboardLayout';
 import { Toaster } from '@/components/ui/toaster';
 
@@ -45,6 +46,7 @@ function App() {
             <Route path="/history" element={<HistoryPage session={session} />} />
             <Route path="/leaves" element={<LeaveManagementPage session={session} />} />
             <Route path="/holidays" element={<HolidaysPage session={session} />} />
+            <Route path="/chat" element={<ChatPage session={session} />} />
           </Route>
         )}
         <Route path="*" element={<Navigate to={session ? "/dashboard" : "/"} replace />} />

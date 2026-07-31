@@ -3,8 +3,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { MapPin, Clock, KeyRound, CheckCircle2, XCircle, AlertCircle, Calendar as CalendarIcon, CalendarDays } from 'lucide-react';
-import { format, startOfMonth, endOfMonth, eachDayOfInterval, getDay, isSameDay, isToday } from 'date-fns';
+import { MapPin, Clock, KeyRound, CheckCircle2, XCircle, AlertCircle, Calendar as CalendarIcon, CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
+import { format, startOfMonth, endOfMonth, eachDayOfInterval, getDay, isSameDay, isToday, subMonths, addMonths } from 'date-fns';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription
 } from "@/components/ui/dialog";
@@ -27,8 +27,8 @@ export default function Dashboard({ session }: { session: any }) {
   
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [newPassword, setNewPassword] = useState("");
+  const [currentMonth, setCurrentMonth] = useState(new Date());
 
-  const currentMonth = new Date();
   const start = startOfMonth(currentMonth);
   const end = endOfMonth(currentMonth);
   const daysInMonth = eachDayOfInterval({ start, end });
@@ -95,7 +95,7 @@ export default function Dashboard({ session }: { session: any }) {
 
   useEffect(() => {
     loadData();
-  }, [session]);
+  }, [session, currentMonth]);
 
   const getLocation = (): Promise<any> => {
     return new Promise((resolve, reject) => {
@@ -173,13 +173,13 @@ export default function Dashboard({ session }: { session: any }) {
     }
   };
 
-  if (loading) {
-    return <div className="flex items-center justify-center h-full">Loading your dashboard...</div>;
+  if (loading && !employee) {
+    return <div className="flex items-center justify-center h-full dark:text-slate-300">Loading your dashboard...</div>;
   }
 
   if (!employee) {
     return (
-      <div className="flex flex-col items-center justify-center h-full space-y-4">
+      <div className="flex flex-col items-center justify-center h-full space-y-4 dark:text-slate-300">
         <p>No employee profile associated with this account.</p>
       </div>
     );
@@ -197,21 +197,21 @@ export default function Dashboard({ session }: { session: any }) {
     const record = monthRecords.find(r => r.date === dateStr);
     const isHol = monthHolidays.some(h => h.date === dateStr);
     
-    if (isHol) return "bg-blue-100 text-blue-700 font-bold border-blue-200";
+    if (isHol) return "bg-blue-100 text-blue-700 font-bold border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800";
     if (!record) {
       // Future dates or weekends
       const weeklyOffs = org?.weekly_offs || [0];
-      if (weeklyOffs.includes(getDay(date))) return "bg-gray-100 text-gray-400"; // weekend
-      if (date > new Date()) return "bg-white text-gray-800 hover:bg-gray-50 border-gray-100"; // future
-      return "bg-white text-gray-800 border-gray-100"; // past no record
+      if (weeklyOffs.includes(getDay(date))) return "bg-gray-100 text-gray-400 dark:bg-slate-800 dark:text-slate-500 border-transparent"; // weekend
+      if (date > new Date()) return "bg-white text-gray-800 hover:bg-gray-50 border-gray-100 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 dark:hover:bg-slate-700"; // future
+      return "bg-white text-gray-800 border-gray-100 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"; // past no record
     }
     
     switch(record.status) {
-      case 'present': return "bg-green-100 text-green-700 font-semibold border-green-200";
-      case 'absent': return "bg-red-100 text-red-700 font-semibold border-red-200";
-      case 'half-day': return "bg-yellow-100 text-yellow-700 font-semibold border-yellow-200";
-      case 'paid-leave': return "bg-purple-100 text-purple-700 font-semibold border-purple-200";
-      default: return "bg-white text-gray-800 border-gray-100";
+      case 'present': return "bg-green-100 text-green-700 font-semibold border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800";
+      case 'absent': return "bg-red-100 text-red-700 font-semibold border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800";
+      case 'half-day': return "bg-yellow-100 text-yellow-700 font-semibold border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400 dark:border-yellow-800";
+      case 'paid-leave': return "bg-purple-100 text-purple-700 font-semibold border-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-800";
+      default: return "bg-white text-gray-800 border-gray-100 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700";
     }
   };
 
@@ -219,10 +219,10 @@ export default function Dashboard({ session }: { session: any }) {
     <div className="space-y-6 max-w-6xl mx-auto">
       {/* Top Level Actions */}
       <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Welcome back, {employee.name.split(' ')[0]}!</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Welcome back, {employee.name.split(' ')[0]}!</h1>
         <div className="flex gap-3">
-          <Button variant="outline" onClick={() => navigate('/leaves')}>Apply for Leave</Button>
-          <Button variant="outline" onClick={() => setChangePasswordOpen(true)}>Change Password</Button>
+          <Button variant="outline" className="dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800" onClick={() => navigate('/leaves')}>Apply for Leave</Button>
+          <Button variant="outline" className="dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800" onClick={() => setChangePasswordOpen(true)}>Change Password</Button>
         </div>
       </div>
 
@@ -233,56 +233,70 @@ export default function Dashboard({ session }: { session: any }) {
           
           {/* Quick Stats */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <Card className="shadow-sm border-gray-200 bg-green-50/50">
+            <Card className="shadow-sm border-gray-200 dark:border-slate-700 bg-green-50/50 dark:bg-green-900/10">
               <CardContent className="p-4 flex flex-col justify-center items-center text-center space-y-1 h-full">
-                <CheckCircle2 className="w-5 h-5 text-green-600 mb-1" />
-                <p className="text-2xl font-bold text-gray-900">{presentDays}</p>
-                <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Present</p>
+                <CheckCircle2 className="w-5 h-5 text-green-600 dark:text-green-500 mb-1" />
+                <p className="text-2xl font-bold text-gray-900 dark:text-white">{presentDays}</p>
+                <p className="text-[10px] font-semibold text-gray-500 dark:text-slate-400 uppercase tracking-wider">Present</p>
               </CardContent>
             </Card>
-            <Card className="shadow-sm border-gray-200 bg-red-50/50">
+            <Card className="shadow-sm border-gray-200 dark:border-slate-700 bg-red-50/50 dark:bg-red-900/10">
               <CardContent className="p-4 flex flex-col justify-center items-center text-center space-y-1 h-full">
-                <XCircle className="w-5 h-5 text-red-600 mb-1" />
-                <p className="text-2xl font-bold text-gray-900">{absentDays}</p>
-                <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Absent</p>
+                <XCircle className="w-5 h-5 text-red-600 dark:text-red-500 mb-1" />
+                <p className="text-2xl font-bold text-gray-900 dark:text-white">{absentDays}</p>
+                <p className="text-[10px] font-semibold text-gray-500 dark:text-slate-400 uppercase tracking-wider">Absent</p>
               </CardContent>
             </Card>
-            <Card className="shadow-sm border-gray-200 bg-yellow-50/50">
+            <Card className="shadow-sm border-gray-200 dark:border-slate-700 bg-yellow-50/50 dark:bg-yellow-900/10">
               <CardContent className="p-4 flex flex-col justify-center items-center text-center space-y-1 h-full">
-                <AlertCircle className="w-5 h-5 text-yellow-600 mb-1" />
-                <p className="text-2xl font-bold text-gray-900">{halfDays}</p>
-                <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Half Days</p>
+                <AlertCircle className="w-5 h-5 text-yellow-600 dark:text-yellow-500 mb-1" />
+                <p className="text-2xl font-bold text-gray-900 dark:text-white">{halfDays}</p>
+                <p className="text-[10px] font-semibold text-gray-500 dark:text-slate-400 uppercase tracking-wider">Half Days</p>
               </CardContent>
             </Card>
-            <Card className="shadow-sm border-gray-200 bg-blue-50/50">
+            <Card className="shadow-sm border-gray-200 dark:border-slate-700 bg-blue-50/50 dark:bg-blue-900/10">
               <CardContent className="p-4 flex flex-col justify-center items-center text-center space-y-1 h-full">
-                <CalendarIcon className="w-5 h-5 text-blue-600 mb-1" />
-                <p className="text-2xl font-bold text-gray-900">{leaveStats.paid}</p>
-                <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Leaves Left</p>
+                <CalendarIcon className="w-5 h-5 text-blue-600 dark:text-blue-500 mb-1" />
+                <p className="text-2xl font-bold text-gray-900 dark:text-white">{leaveStats.paid}</p>
+                <p className="text-[10px] font-semibold text-gray-500 dark:text-slate-400 uppercase tracking-wider">Leaves Left</p>
               </CardContent>
             </Card>
           </div>
 
           {/* Visual Calendar Widget */}
-          <Card className="shadow-sm border-gray-200 overflow-hidden">
-            <CardHeader className="bg-gray-50/50 pb-4 border-b border-gray-100 flex flex-row items-center justify-between">
-              <CardTitle className="text-lg">Monthly Attendance ({format(currentMonth, 'MMMM yyyy')})</CardTitle>
-              <div className="flex gap-2 text-xs">
-                <span className="flex items-center"><span className="w-3 h-3 bg-green-200 rounded-sm mr-1"></span>Present</span>
-                <span className="flex items-center"><span className="w-3 h-3 bg-red-200 rounded-sm mr-1"></span>Absent</span>
-                <span className="flex items-center"><span className="w-3 h-3 bg-yellow-200 rounded-sm mr-1"></span>Leave</span>
-                <span className="flex items-center"><span className="w-3 h-3 bg-blue-200 rounded-sm mr-1"></span>Holiday</span>
+          <Card className="shadow-sm border-gray-200 dark:border-slate-700 overflow-hidden dark:bg-slate-800">
+            <CardHeader className="bg-gray-50/50 dark:bg-slate-800 pb-4 border-b border-gray-100 dark:border-slate-700 flex flex-row items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <Button variant="ghost" size="icon" className="h-8 w-8 dark:hover:bg-slate-700" onClick={() => setCurrentMonth(subMonths(currentMonth, 1))}>
+                  <ChevronLeft className="w-4 h-4 dark:text-slate-300" />
+                </Button>
+                <CardTitle className="text-lg dark:text-white min-w-[120px] text-center">{format(currentMonth, 'MMMM yyyy')}</CardTitle>
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className="h-8 w-8 dark:hover:bg-slate-700" 
+                  onClick={() => setCurrentMonth(addMonths(currentMonth, 1))}
+                  disabled={new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1) > new Date()}
+                >
+                  <ChevronRight className="w-4 h-4 dark:text-slate-300" />
+                </Button>
+              </div>
+              <div className="flex gap-2 text-xs dark:text-slate-300">
+                <span className="flex items-center"><span className="w-3 h-3 bg-green-200 dark:bg-green-700 rounded-sm mr-1"></span>Present</span>
+                <span className="flex items-center"><span className="w-3 h-3 bg-red-200 dark:bg-red-700 rounded-sm mr-1"></span>Absent</span>
+                <span className="flex items-center"><span className="w-3 h-3 bg-yellow-200 dark:bg-yellow-700 rounded-sm mr-1"></span>Leave</span>
+                <span className="flex items-center"><span className="w-3 h-3 bg-blue-200 dark:bg-blue-700 rounded-sm mr-1"></span>Holiday</span>
               </div>
             </CardHeader>
             <CardContent className="p-6">
               <div className="grid grid-cols-7 gap-2 mb-2">
                 {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-                  <div key={day} className="text-center text-xs font-semibold text-gray-500 py-1">{day}</div>
+                  <div key={day} className="text-center text-xs font-semibold text-gray-500 dark:text-slate-400 py-1">{day}</div>
                 ))}
               </div>
               <div className="grid grid-cols-7 gap-2">
                 {Array.from({ length: startDayOfWeek }).map((_, i) => (
-                  <div key={`empty-${i}`} className="h-14 bg-gray-50/30 rounded-lg"></div>
+                  <div key={`empty-${i}`} className="h-14 bg-gray-50/30 dark:bg-slate-800/50 rounded-lg"></div>
                 ))}
                 
                 {daysInMonth.map(date => {
@@ -308,11 +322,11 @@ export default function Dashboard({ session }: { session: any }) {
         <div className="lg:col-span-1 space-y-6">
           
           {/* Clock In / Out Widget */}
-          <Card className="shadow-sm border-gray-200">
-            <CardHeader className="bg-gray-50/50 pb-4 border-b border-gray-100">
-              <CardTitle className="flex justify-between items-center text-lg">
+          <Card className="shadow-sm border-gray-200 dark:border-slate-700 dark:bg-slate-800">
+            <CardHeader className="bg-gray-50/50 dark:bg-slate-800 pb-4 border-b border-gray-100 dark:border-slate-700">
+              <CardTitle className="flex justify-between items-center text-lg dark:text-white">
                 Today's Action
-                <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${isClockedOut ? 'bg-gray-200 text-gray-700' : isClockedIn ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
+                <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${isClockedOut ? 'bg-gray-200 text-gray-700 dark:bg-slate-700 dark:text-slate-300' : isClockedIn ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400'}`}>
                   {isClockedOut ? 'Finished' : isClockedIn ? 'Active' : 'Not Started'}
                 </span>
               </CardTitle>
@@ -321,7 +335,7 @@ export default function Dashboard({ session }: { session: any }) {
               {!isClockedIn ? (
                 <Button 
                   size="lg" 
-                  className="w-full h-14 text-base rounded-xl shadow-md bg-blue-600 hover:bg-blue-700 transition-all hover:shadow-lg"
+                  className="w-full h-14 text-base rounded-xl shadow-md bg-blue-600 hover:bg-blue-700 transition-all hover:shadow-lg dark:bg-blue-600 dark:hover:bg-blue-700 dark:text-white"
                   onClick={() => handleClockInOut('in')}
                   disabled={actionLoading}
                 >
@@ -330,14 +344,14 @@ export default function Dashboard({ session }: { session: any }) {
                 </Button>
               ) : !isClockedOut ? (
                 <div className="space-y-4 w-full text-center">
-                  <p className="text-gray-600 font-medium flex items-center justify-center bg-green-50 text-green-700 py-2 rounded-lg">
+                  <p className="text-gray-600 dark:text-green-400 font-medium flex items-center justify-center bg-green-50 dark:bg-green-900/20 text-green-700 py-2 rounded-lg">
                     <Clock className="w-4 h-4 mr-2" />
                     In at {format(new Date(todayRecord.clock_in_time), "hh:mm a")}
                   </p>
                   <Button 
                     size="lg" 
                     variant="destructive"
-                    className="w-full h-14 text-base rounded-xl shadow-md transition-all hover:shadow-lg"
+                    className="w-full h-14 text-base rounded-xl shadow-md transition-all hover:shadow-lg dark:bg-red-600 dark:hover:bg-red-700 dark:text-white"
                     onClick={() => handleClockInOut('out')}
                     disabled={actionLoading}
                   >
@@ -346,45 +360,45 @@ export default function Dashboard({ session }: { session: any }) {
                   </Button>
                 </div>
               ) : (
-                <div className="text-center space-y-3 w-full bg-gray-50 p-4 rounded-xl">
+                <div className="text-center space-y-3 w-full bg-gray-50 dark:bg-slate-900/50 p-4 rounded-xl">
                   <CheckCircle2 className="w-8 h-8 mx-auto text-green-500 mb-2" />
-                  <p className="font-semibold text-lg text-gray-900">Shift Completed</p>
-                  <div className="text-sm text-gray-500 space-y-1 flex justify-center gap-4">
+                  <p className="font-semibold text-lg text-gray-900 dark:text-white">Shift Completed</p>
+                  <div className="text-sm text-gray-500 dark:text-slate-400 space-y-1 flex justify-center gap-4">
                     <p>In: {format(new Date(todayRecord.clock_in_time), "hh:mm a")}</p>
                     <p>Out: {format(new Date(todayRecord.clock_out_time), "hh:mm a")}</p>
                   </div>
                 </div>
               )}
               
-              <Button variant="link" size="sm" className="text-gray-500 hover:text-gray-900">
+              <Button variant="link" size="sm" className="text-gray-500 hover:text-gray-900 dark:text-slate-400 dark:hover:text-white">
                 Missed a punch? Regularize
               </Button>
             </CardContent>
           </Card>
 
           {/* Upcoming Holidays Widget */}
-          <Card className="shadow-sm border-gray-200">
-            <CardHeader className="bg-gray-50/50 pb-4 border-b border-gray-100 flex flex-row justify-between items-center">
-              <CardTitle className="text-lg">Upcoming Holidays</CardTitle>
-              <Button variant="ghost" size="sm" className="h-8 text-xs text-blue-600 p-0 hover:bg-transparent" onClick={() => navigate('/holidays')}>View All</Button>
+          <Card className="shadow-sm border-gray-200 dark:border-slate-700 dark:bg-slate-800">
+            <CardHeader className="bg-gray-50/50 dark:bg-slate-800 pb-4 border-b border-gray-100 dark:border-slate-700 flex flex-row justify-between items-center">
+              <CardTitle className="text-lg dark:text-white">Upcoming Holidays</CardTitle>
+              <Button variant="ghost" size="sm" className="h-8 text-xs text-blue-600 dark:text-blue-400 p-0 hover:bg-transparent dark:hover:bg-transparent" onClick={() => navigate('/holidays')}>View All</Button>
             </CardHeader>
             <CardContent className="p-0">
               {upcomingHolidays.length === 0 ? (
-                <div className="p-6 text-center text-gray-500 flex flex-col items-center">
-                  <CalendarDays className="w-8 h-8 text-gray-300 mb-2" />
+                <div className="p-6 text-center text-gray-500 dark:text-slate-400 flex flex-col items-center">
+                  <CalendarDays className="w-8 h-8 text-gray-300 dark:text-slate-600 mb-2" />
                   <p className="text-sm">No upcoming holidays scheduled.</p>
                 </div>
               ) : (
-                <div className="divide-y divide-gray-100">
+                <div className="divide-y divide-gray-100 dark:divide-slate-700">
                   {upcomingHolidays.map((h, i) => (
-                    <div key={i} className="p-4 flex items-center justify-between hover:bg-gray-50 transition-colors">
+                    <div key={i} className="p-4 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-slate-700/50 transition-colors">
                       <div>
-                        <p className="font-semibold text-gray-900 text-sm">{h.name}</p>
-                        <p className="text-xs text-gray-500 capitalize">{h.type} Holiday</p>
+                        <p className="font-semibold text-gray-900 dark:text-white text-sm">{h.name}</p>
+                        <p className="text-xs text-gray-500 dark:text-slate-400 capitalize">{h.type} Holiday</p>
                       </div>
                       <div className="text-right">
-                        <p className="font-bold text-blue-600 text-sm">{format(new Date(h.date), 'MMM dd')}</p>
-                        <p className="text-[10px] text-gray-400 font-medium uppercase">{format(new Date(h.date), 'EEEE')}</p>
+                        <p className="font-bold text-blue-600 dark:text-blue-400 text-sm">{format(new Date(h.date), 'MMM dd')}</p>
+                        <p className="text-[10px] text-gray-400 dark:text-slate-500 font-medium uppercase">{format(new Date(h.date), 'EEEE')}</p>
                       </div>
                     </div>
                   ))}
@@ -397,24 +411,25 @@ export default function Dashboard({ session }: { session: any }) {
       </div>
 
       <Dialog open={changePasswordOpen} onOpenChange={setChangePasswordOpen}>
-        <DialogContent>
+        <DialogContent className="dark:bg-slate-800 dark:text-white dark:border-slate-700">
           <DialogHeader>
             <DialogTitle>Change Password</DialogTitle>
-            <DialogDescription>Update your portal login password.</DialogDescription>
+            <DialogDescription className="dark:text-slate-400">Update your portal login password.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label>New Password</Label>
+              <Label className="dark:text-slate-300">New Password</Label>
               <Input 
                 type="password" 
                 value={newPassword} 
                 onChange={e => setNewPassword(e.target.value)}
                 placeholder="Must be at least 6 characters"
+                className="dark:bg-slate-900 dark:border-slate-700 dark:text-white"
               />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setChangePasswordOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setChangePasswordOpen(false)} className="dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Cancel</Button>
             <Button onClick={handlePasswordChange} disabled={actionLoading || newPassword.length < 6}>
               Update Password
             </Button>

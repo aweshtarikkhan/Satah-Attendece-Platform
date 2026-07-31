@@ -101,9 +101,9 @@ export default function LeaveManagementPage({ session }: { session: any }) {
 
   const getStatusBadge = (status: string) => {
     switch(status) {
-      case 'approved': return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-green-50 text-green-700 border border-green-200"><CheckCircle2 className="w-3 h-3 mr-1" /> Approved</span>;
-      case 'rejected': return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-red-50 text-red-700 border border-red-200"><XCircle className="w-3 h-3 mr-1" /> Rejected</span>;
-      default: return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-yellow-50 text-yellow-700 border border-yellow-200"><Clock className="w-3 h-3 mr-1" /> Pending</span>;
+      case 'approved': return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-green-50 text-green-700 border border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800"><CheckCircle2 className="w-3 h-3 mr-1" /> Approved</span>;
+      case 'rejected': return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-red-50 text-red-700 border border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800"><XCircle className="w-3 h-3 mr-1" /> Rejected</span>;
+      default: return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-yellow-50 text-yellow-700 border border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400 dark:border-yellow-800"><Clock className="w-3 h-3 mr-1" /> Pending</span>;
     }
   };
 
@@ -111,63 +111,63 @@ export default function LeaveManagementPage({ session }: { session: any }) {
     <div className="max-w-5xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Leave Management</h1>
-          <p className="text-gray-500 text-sm mt-1">Track your leave requests and balances.</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Leave Management</h1>
+          <p className="text-gray-500 dark:text-slate-400 text-sm mt-1">Track your leave requests and balances.</p>
         </div>
-        <Button onClick={() => setApplyOpen(true)} className="bg-blue-600 hover:bg-blue-700 shadow-sm">
+        <Button onClick={() => setApplyOpen(true)} className="bg-blue-600 hover:bg-blue-700 shadow-sm dark:bg-blue-600 dark:hover:bg-blue-700 dark:text-white">
           <Umbrella className="w-4 h-4 mr-2" /> Apply for Leave
         </Button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <Card className="col-span-1 shadow-sm border-gray-200 bg-white">
+        <Card className="col-span-1 shadow-sm border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800">
           <CardHeader>
-            <CardTitle className="text-lg">Leave Balances</CardTitle>
+            <CardTitle className="text-lg dark:text-white">Leave Balances</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex justify-between items-center p-3 rounded-lg bg-gray-50 border border-gray-100">
-              <span className="font-medium text-gray-700">Casual Leave</span>
-              <span className="text-lg font-bold text-gray-900">12</span>
+            <div className="flex justify-between items-center p-3 rounded-lg bg-gray-50 dark:bg-slate-900/50 border border-gray-100 dark:border-slate-700">
+              <span className="font-medium text-gray-700 dark:text-slate-300">Casual Leave</span>
+              <span className="text-lg font-bold text-gray-900 dark:text-white">12</span>
             </div>
-            <div className="flex justify-between items-center p-3 rounded-lg bg-gray-50 border border-gray-100">
-              <span className="font-medium text-gray-700">Sick Leave</span>
-              <span className="text-lg font-bold text-gray-900">5</span>
+            <div className="flex justify-between items-center p-3 rounded-lg bg-gray-50 dark:bg-slate-900/50 border border-gray-100 dark:border-slate-700">
+              <span className="font-medium text-gray-700 dark:text-slate-300">Sick Leave</span>
+              <span className="text-lg font-bold text-gray-900 dark:text-white">5</span>
             </div>
-            <div className="flex justify-between items-center p-3 rounded-lg bg-gray-50 border border-gray-100">
-              <span className="font-medium text-gray-700">Paid Leave</span>
-              <span className="text-lg font-bold text-gray-900">8</span>
+            <div className="flex justify-between items-center p-3 rounded-lg bg-gray-50 dark:bg-slate-900/50 border border-gray-100 dark:border-slate-700">
+              <span className="font-medium text-gray-700 dark:text-slate-300">Paid Leave</span>
+              <span className="text-lg font-bold text-gray-900 dark:text-white">8</span>
             </div>
           </CardContent>
         </Card>
 
-        <Card className="col-span-1 md:col-span-2 shadow-sm border-gray-200">
+        <Card className="col-span-1 md:col-span-2 shadow-sm border-gray-200 dark:border-slate-700 dark:bg-slate-800">
           <CardHeader>
-            <CardTitle className="text-lg">Leave History</CardTitle>
+            <CardTitle className="text-lg dark:text-white">Leave History</CardTitle>
           </CardHeader>
           <CardContent>
             {loading ? (
-              <p className="text-gray-500 text-center py-8">Loading history...</p>
+              <p className="text-gray-500 dark:text-slate-400 text-center py-8">Loading history...</p>
             ) : leaves.length === 0 ? (
               <div className="text-center py-12">
-                <Umbrella className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                <p className="text-gray-500 font-medium">No leave requests found.</p>
-                <p className="text-gray-400 text-sm">Your leave history will appear here.</p>
+                <Umbrella className="w-12 h-12 text-gray-300 dark:text-slate-600 mx-auto mb-3" />
+                <p className="text-gray-500 dark:text-slate-400 font-medium">No leave requests found.</p>
+                <p className="text-gray-400 dark:text-slate-500 text-sm">Your leave history will appear here.</p>
               </div>
             ) : (
               <div className="space-y-4">
                 {leaves.map((leave) => (
-                  <div key={leave.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-gray-100 bg-gray-50 hover:bg-white transition-colors">
+                  <div key={leave.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-gray-100 dark:border-slate-700 bg-gray-50 dark:bg-slate-900/50 hover:bg-white dark:hover:bg-slate-700 transition-colors">
                     <div>
                       <div className="flex items-center space-x-3 mb-1">
-                        <span className="font-semibold text-gray-900 capitalize">{leave.leave_type} Leave</span>
+                        <span className="font-semibold text-gray-900 dark:text-white capitalize">{leave.leave_type} Leave</span>
                         {getStatusBadge(leave.status)}
                       </div>
-                      <p className="text-sm text-gray-600">
+                      <p className="text-sm text-gray-600 dark:text-slate-400">
                         {format(parseISO(leave.start_date), 'MMM dd, yyyy')} - {format(parseISO(leave.end_date), 'MMM dd, yyyy')} 
-                        <span className="mx-2 text-gray-300">|</span> 
+                        <span className="mx-2 text-gray-300 dark:text-slate-600">|</span> 
                         {leave.days} day(s)
                       </p>
-                      <p className="text-sm text-gray-500 mt-1 italic">"{leave.reason}"</p>
+                      <p className="text-sm text-gray-500 dark:text-slate-500 mt-1 italic">"{leave.reason}"</p>
                     </div>
                   </div>
                 ))}
@@ -178,36 +178,38 @@ export default function LeaveManagementPage({ session }: { session: any }) {
       </div>
 
       <Dialog open={applyOpen} onOpenChange={setApplyOpen}>
-        <DialogContent>
+        <DialogContent className="dark:bg-slate-800 dark:border-slate-700 dark:text-white">
           <DialogHeader>
             <DialogTitle>Apply for Leave</DialogTitle>
-            <DialogDescription>Submit a new leave application to HR.</DialogDescription>
+            <DialogDescription className="dark:text-slate-400">Submit a new leave application to HR.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Start Date</Label>
+                <Label className="dark:text-slate-300">Start Date</Label>
                 <Input 
                   type="date" 
                   value={leaveData.startDate} 
                   onChange={e => setLeaveData({...leaveData, startDate: e.target.value})}
                   min={format(new Date(), 'yyyy-MM-dd')}
+                  className="dark:bg-slate-900 dark:border-slate-700 dark:text-white"
                 />
               </div>
               <div className="space-y-2">
-                <Label>End Date</Label>
+                <Label className="dark:text-slate-300">End Date</Label>
                 <Input 
                   type="date" 
                   value={leaveData.endDate} 
                   onChange={e => setLeaveData({...leaveData, endDate: e.target.value})}
                   min={leaveData.startDate || format(new Date(), 'yyyy-MM-dd')}
+                  className="dark:bg-slate-900 dark:border-slate-700 dark:text-white"
                 />
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Leave Type</Label>
+              <Label className="dark:text-slate-300">Leave Type</Label>
               <select 
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-900 dark:border-slate-700 dark:text-white"
                 value={leaveData.leaveType}
                 onChange={e => setLeaveData({...leaveData, leaveType: e.target.value})}
               >
@@ -218,9 +220,9 @@ export default function LeaveManagementPage({ session }: { session: any }) {
               </select>
             </div>
             <div className="space-y-2">
-              <Label>Reason</Label>
+              <Label className="dark:text-slate-300">Reason</Label>
               <textarea 
-                className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-900 dark:border-slate-700 dark:text-white dark:placeholder-slate-500"
                 placeholder="Brief reason for your leave..."
                 value={leaveData.reason}
                 onChange={e => setLeaveData({...leaveData, reason: e.target.value})}
@@ -228,8 +230,8 @@ export default function LeaveManagementPage({ session }: { session: any }) {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setApplyOpen(false)}>Cancel</Button>
-            <Button onClick={handleApplyLeave} disabled={actionLoading}>
+            <Button variant="outline" onClick={() => setApplyOpen(false)} className="dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Cancel</Button>
+            <Button onClick={handleApplyLeave} disabled={actionLoading} className="dark:bg-blue-600 dark:text-white dark:hover:bg-blue-700">
               {actionLoading ? "Submitting..." : "Submit Application"}
             </Button>
           </DialogFooter>
