@@ -334,7 +334,7 @@ export default function ChatPage({ session }: { session: any }) {
   const activeUsers = employeeList.map(emp => {
     const conn = activeConnections.find(c => c.sender_id === emp.id || c.receiver_id === emp.id);
     return { ...emp, connection: conn || null };
-  });
+  }).filter(emp => !pendingRequests.some(c => c.sender_id === emp.id));
 
   return (
     <div className="max-w-6xl mx-auto h-[calc(100vh-8rem)] flex flex-col">
@@ -386,7 +386,7 @@ export default function ChatPage({ session }: { session: any }) {
                             <span className="px-1 rounded bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 text-[9px] font-bold tracking-wider">HR</span>
                           )}
                         </p>
-                        <p className="text-[10px] text-gray-500 dark:text-slate-400 truncate">@{emp.username}</p>
+                        <p className="text-[10px] text-gray-500 dark:text-slate-400 truncate">@{emp.username} • {emp.designation || 'Member'}</p>
                       </div>
                     </div>
                   </button>
@@ -421,7 +421,7 @@ export default function ChatPage({ session }: { session: any }) {
             
             {/* Direct Messages Section */}
             <div className="py-2 border-t border-gray-100 dark:border-slate-700/50">
-              <h3 className="px-4 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Direct Messages</h3>
+              <h3 className="px-4 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Employees / Direct Messages</h3>
               {activeUsers.map(emp => (
                 <button
                   key={emp.id}
