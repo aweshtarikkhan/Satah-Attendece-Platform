@@ -54,7 +54,7 @@ export default function ChatPage({ session }: { session: any }) {
     // Load all other employees in org
     const { data: emps } = await supabase
       .from('employees')
-      .select('id, name, username, designation, role')
+      .select('id, name, username, designation')
       .eq('org_id', employee.org_id)
       .neq('id', employee.id)
       .order('name');
