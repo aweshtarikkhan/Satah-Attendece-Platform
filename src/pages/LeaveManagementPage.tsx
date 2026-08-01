@@ -18,6 +18,7 @@ export default function LeaveManagementPage({ session }: { session: any }) {
   const [applyOpen, setApplyOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const { toast } = useToast();
+  const [leaveBalances, setLeaveBalances] = useState<Record<string, { used: number; accrued: number; annual: number }>>({});
 
   const [leaveData, setLeaveData] = useState({
     startDate: '',
@@ -37,14 +38,28 @@ export default function LeaveManagementPage({ session }: { session: any }) {
 
       if (empData) {
         setEmployee(empData);
-        // Note: The leaves table is created by 20260618111949_0ed3c09f-9afd-4656-bf51-2b2ff40e46bf.sql
-        const { data: leavesData } = await supabase
-          .from('leaves')
-          .select('*')
-          .eq('employee_id', empData.id)
-          .order('created_at', { ascending: false });
-        
-        setLeaves(leavesData || []);
+
+        const [leavesRes, balancesRes, policiesRes] = await Promise.all([
+          supabase.from('leaves').select('*').eq('employee_id', empData.id).order('created_at', { ascending: false }),
+          (supabase as any).from('employee_leave_balances').select('*').eq('employee_id', empData.id),
+          (supabase as any).from('leave_policies').select('*').eq('org_id', empData.org_id),
+        ]);
+
+        setLeaves(leavesRes.data || []);
+
+        // Build balance map
+        const DEFAULT_ANNUAL: Record<string, number> = { casual: 12, sick: 5, paid: 8 };
+        const bmap: Record<string, { used: number; accrued: number; annual: number }> = {};
+        ['casual', 'sick', 'paid'].forEach((t) => {
+          const bal = (balancesRes.data || []).find((b: any) => b.leave_type === t);
+          const pol = (policiesRes.data || []).find((p: any) => p.leave_type === t);
+          bmap[t] = {
+            used: bal?.used ?? 0,
+            accrued: bal?.accrued ?? 0,
+            annual: pol?.annual_limit ?? DEFAULT_ANNUAL[t] ?? 0,
+          };
+        });
+        setLeaveBalances(bmap);
       }
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
@@ -125,18 +140,31 @@ export default function LeaveManagementPage({ session }: { session: any }) {
             <CardTitle className="text-lg dark:text-white">Leave Balances</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex justify-between items-center p-3 rounded-lg bg-gray-50 dark:bg-slate-900/50 border border-gray-100 dark:border-slate-700">
-              <span className="font-medium text-gray-700 dark:text-slate-300">Casual Leave</span>
-              <span className="text-lg font-bold text-gray-900 dark:text-white">12</span>
-            </div>
-            <div className="flex justify-between items-center p-3 rounded-lg bg-gray-50 dark:bg-slate-900/50 border border-gray-100 dark:border-slate-700">
-              <span className="font-medium text-gray-700 dark:text-slate-300">Sick Leave</span>
-              <span className="text-lg font-bold text-gray-900 dark:text-white">5</span>
-            </div>
-            <div className="flex justify-between items-center p-3 rounded-lg bg-gray-50 dark:bg-slate-900/50 border border-gray-100 dark:border-slate-700">
-              <span className="font-medium text-gray-700 dark:text-slate-300">Paid Leave</span>
-              <span className="text-lg font-bold text-gray-900 dark:text-white">8</span>
-            </div>
+            {[
+              { key: 'casual', label: 'Casual Leave', color: 'bg-blue-500' },
+              { key: 'sick',   label: 'Sick Leave',   color: 'bg-amber-500' },
+              { key: 'paid',   label: 'Paid Leave',   color: 'bg-green-500' },
+            ].map(({ key, label, color }) => {
+              const b = leaveBalances[key] || { used: 0, accrued: 0, annual: 0 };
+              const remaining = Math.max(0, b.annual - b.used);
+              const pct = b.annual > 0 ? Math.min(100, (b.used / b.annual) * 100) : 0;
+              return (
+                <div key={key} className="p-3 rounded-lg bg-gray-50 dark:bg-slate-900/50 border border-gray-100 dark:border-slate-700">
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="font-medium text-gray-700 dark:text-slate-300 text-sm">{label}</span>
+                    <span className="text-sm font-bold text-gray-900 dark:text-white">{remaining} left</span>
+                  </div>
+                  <div className="text-xs text-gray-500 dark:text-slate-400 mb-2">{b.used} used of {b.annual} annual</div>
+                  <div className="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-1.5">
+                    <div
+                      className={`h-1.5 rounded-full ${pct >= 100 ? 'bg-red-500' : pct >= 80 ? 'bg-amber-500' : color}`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+            {loading && <p className="text-xs text-gray-400">Loading balances...</p>}
           </CardContent>
         </Card>
 

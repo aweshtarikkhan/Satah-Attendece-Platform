@@ -19,7 +19,9 @@ export default function Dashboard({ session }: { session: any }) {
   const [monthRecords, setMonthRecords] = useState<any[]>([]);
   const [monthHolidays, setMonthHolidays] = useState<any[]>([]);
   const [upcomingHolidays, setUpcomingHolidays] = useState<any[]>([]);
-  const [leaveStats, setLeaveStats] = useState({ casual: 10, sick: 5, paid: 15 }); // Mocked for now
+  const [monthLeaves, setMonthLeaves] = useState<any[]>([]);
+  const [employeeShift, setEmployeeShift] = useState<any>(null);
+  const [leaveStats, setLeaveStats] = useState({ casual: 10, sick: 5, paid: 15 });
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const { toast } = useToast();
@@ -75,6 +77,24 @@ export default function Dashboard({ session }: { session: any }) {
         .gte('date', startStr)
         .lte('date', endStr);
       setMonthHolidays(monthHols || []);
+
+      // Fetch approved leaves for this month
+      const { data: monthLeavesData } = await supabase
+        .from('leaves')
+        .select('*')
+        .eq('employee_id', empData.id)
+        .eq('status', 'approved')
+        .lte('start_date', endStr)
+        .gte('end_date', startStr);
+      setMonthLeaves(monthLeavesData || []);
+
+      // Fetch employee shift assignment
+      const { data: shiftAssign } = await (supabase as any)
+        .from('employee_shifts')
+        .select('*, shifts(*)')
+        .eq('employee_id', empData.id)
+        .single();
+      setEmployeeShift(shiftAssign?.shifts || null);
 
       const { data: upcomingHols } = await supabase
         .from('holidays')
@@ -196,22 +216,32 @@ export default function Dashboard({ session }: { session: any }) {
     const dateStr = format(date, 'yyyy-MM-dd');
     const record = monthRecords.find(r => r.date === dateStr);
     const isHol = monthHolidays.some(h => h.date === dateStr);
-    
-    if (isHol) return "bg-blue-100 text-blue-700 font-bold border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800";
+    const weeklyOffs = org?.weekly_offs || [0];
+    const isWeekOff = weeklyOffs.includes(getDay(date));
+
+    // Check approved leave on this date
+    const hasApprovedLeave = monthLeaves.some(l => {
+      try {
+        return dateStr >= l.start_date && dateStr <= l.end_date;
+      } catch { return false; }
+    });
+
+    if (isHol || isWeekOff) return "bg-blue-100 text-blue-700 font-bold border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800";
+
     if (!record) {
-      // Future dates or weekends
-      const weeklyOffs = org?.weekly_offs || [0];
-      if (weeklyOffs.includes(getDay(date))) return "bg-gray-100 text-gray-400 dark:bg-slate-800 dark:text-slate-500 border-transparent"; // weekend
+      if (hasApprovedLeave) return "bg-purple-100 text-purple-700 font-semibold border-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-800";
       if (date > new Date()) return "bg-white text-gray-800 hover:bg-gray-50 border-gray-100 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 dark:hover:bg-slate-700"; // future
-      return "bg-white text-gray-800 border-gray-100 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"; // past no record
+      return "bg-gray-50 text-gray-400 border-gray-100 dark:bg-slate-800/50 dark:text-slate-600 dark:border-slate-700"; // past no record = blank (NOT present)
     }
-    
+
     switch(record.status) {
       case 'present': return "bg-green-100 text-green-700 font-semibold border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800";
+      case 'late': return "bg-amber-100 text-amber-700 font-semibold border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800";
+      case 'half_day': case 'half-day': return "bg-yellow-100 text-yellow-700 font-semibold border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400 dark:border-yellow-800";
       case 'absent': return "bg-red-100 text-red-700 font-semibold border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800";
-      case 'half-day': return "bg-yellow-100 text-yellow-700 font-semibold border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400 dark:border-yellow-800";
-      case 'paid-leave': return "bg-purple-100 text-purple-700 font-semibold border-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-800";
-      default: return "bg-white text-gray-800 border-gray-100 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700";
+      case 'approved_leave': case 'paid-leave': return "bg-purple-100 text-purple-700 font-semibold border-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-800";
+      case 'holiday': return "bg-blue-100 text-blue-700 font-bold border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800";
+      default: return "bg-gray-50 text-gray-400 border-gray-100 dark:bg-slate-800/50 dark:text-slate-600 dark:border-slate-700";
     }
   };
 
@@ -219,7 +249,17 @@ export default function Dashboard({ session }: { session: any }) {
     <div className="space-y-6 max-w-6xl mx-auto">
       {/* Top Level Actions */}
       <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Welcome back, {employee.name.split(' ')[0]}!</h1>
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Welcome back, {employee.name.split(' ')[0]}!</h1>
+          {employeeShift && (
+            <p className="text-sm text-gray-500 dark:text-slate-400 mt-1 flex items-center gap-1.5">
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800">
+                Shift: {employeeShift.name} &bull; {employeeShift.start_time?.slice(0,5)} – {employeeShift.end_time?.slice(0,5)}
+              </span>
+              <span className="text-xs text-gray-400 dark:text-slate-500">Grace {employeeShift.grace_minutes ?? 15} min</span>
+            </p>
+          )}
+        </div>
         <div className="flex gap-3">
           <Button variant="outline" className="dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800" onClick={() => navigate('/leaves')}>Apply for Leave</Button>
           <Button variant="outline" className="dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800" onClick={() => setChangePasswordOpen(true)}>Change Password</Button>
