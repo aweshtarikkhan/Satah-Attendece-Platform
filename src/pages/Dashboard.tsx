@@ -208,15 +208,32 @@ export default function Dashboard({ session }: { session: any }) {
   const isClockedIn = todayRecord?.clock_in_time != null;
   const isClockedOut = todayRecord?.clock_out_time != null;
 
-  const presentDays = monthRecords.filter(r => r.status === 'present').length;
-  const halfDays = monthRecords.filter(r => r.status === 'half-day').length;
-  const absentDays = monthRecords.filter(r => r.status === 'absent').length;
+  const daysUpToToday = daysInMonth.filter(d => format(d, 'yyyy-MM-dd') <= format(new Date(), 'yyyy-MM-dd'));
+  const weeklyOffs = org?.weekly_offs || [0];
+  
+  let calculatedAbsentCount = 0;
+  daysUpToToday.forEach(d => {
+    const ds = format(d, 'yyyy-MM-dd');
+    const isWeekOff = weeklyOffs.includes(getDay(d));
+    const isHol = monthHolidays.some(h => h.date === ds);
+    if (isWeekOff || isHol) return;
+    const hasApprovedLeave = monthLeaves.some(l => ds >= l.start_date && ds <= l.end_date);
+    if (hasApprovedLeave) return;
+    const rec = monthRecords.find(r => r.date === ds);
+    if (!rec || rec.status === 'absent') {
+      calculatedAbsentCount++;
+    }
+  });
+
+  const presentDays = monthRecords.filter(r => r.status === 'present' || r.status === 'late').length;
+  const halfDays = monthRecords.filter(r => r.status === 'half-day' || r.status === 'half_day').length;
+  const absentDays = calculatedAbsentCount;
 
   const getDayStatusColor = (date: Date) => {
     const dateStr = format(date, 'yyyy-MM-dd');
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
     const record = monthRecords.find(r => r.date === dateStr);
     const isHol = monthHolidays.some(h => h.date === dateStr);
-    const weeklyOffs = org?.weekly_offs || [0];
     const isWeekOff = weeklyOffs.includes(getDay(date));
 
     // Check approved leave on this date
@@ -230,8 +247,8 @@ export default function Dashboard({ session }: { session: any }) {
 
     if (!record) {
       if (hasApprovedLeave) return "bg-purple-100 text-purple-700 font-semibold border-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-800";
-      if (date > new Date()) return "bg-white text-gray-800 hover:bg-gray-50 border-gray-100 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 dark:hover:bg-slate-700"; // future
-      return "bg-gray-50 text-gray-400 border-gray-100 dark:bg-slate-800/50 dark:text-slate-600 dark:border-slate-700"; // past no record = blank (NOT present)
+      if (dateStr > todayStr) return "bg-white text-gray-800 hover:bg-gray-50 border-gray-100 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 dark:hover:bg-slate-700"; // future
+      return "bg-red-100 text-red-700 font-semibold border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800"; // past/today no record = Absent!
     }
 
     switch(record.status) {
@@ -241,7 +258,7 @@ export default function Dashboard({ session }: { session: any }) {
       case 'absent': return "bg-red-100 text-red-700 font-semibold border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800";
       case 'approved_leave': case 'paid-leave': return "bg-purple-100 text-purple-700 font-semibold border-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-800";
       case 'holiday': return "bg-blue-100 text-blue-700 font-bold border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800";
-      default: return "bg-gray-50 text-gray-400 border-gray-100 dark:bg-slate-800/50 dark:text-slate-600 dark:border-slate-700";
+      default: return "bg-red-100 text-red-700 font-semibold border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800";
     }
   };
 

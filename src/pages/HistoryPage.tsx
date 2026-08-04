@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
-import { format, startOfMonth, endOfMonth, parseISO, subMonths } from 'date-fns';
+import { format, startOfMonth, endOfMonth, parseISO, subMonths, eachDayOfInterval } from 'date-fns';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { ChevronLeft, ChevronRight, CheckCircle2, XCircle, AlertCircle, Clock } from 'lucide-react';
@@ -28,15 +28,83 @@ export default function HistoryPage({ session }: { session: any }) {
           const start = format(startOfMonth(currentMonth), 'yyyy-MM-dd');
           const end = format(endOfMonth(currentMonth), 'yyyy-MM-dd');
           
-          const { data: monthData } = await supabase
-            .from('attendances')
-            .select('*')
-            .eq('employee_id', empData.id)
-            .gte('date', start)
-            .lte('date', end)
-            .order('date', { ascending: false });
+          const [{ data: monthData }, { data: orgData }, { data: holsData }, { data: leavesData }] = await Promise.all([
+            supabase
+              .from('attendances')
+              .select('*')
+              .eq('employee_id', empData.id)
+              .gte('date', start)
+              .lte('date', end),
+            supabase
+              .from('organizations')
+              .select('weekly_offs')
+              .eq('id', empData.org_id)
+              .single(),
+            supabase
+              .from('holidays')
+              .select('*')
+              .eq('org_id', empData.org_id)
+              .gte('date', start)
+              .lte('date', end),
+            supabase
+              .from('leaves')
+              .select('*')
+              .eq('employee_id', empData.id)
+              .eq('status', 'approved')
+              .lte('start_date', end)
+              .gte('end_date', start)
+          ]);
 
-          setRecords(monthData || []);
+          const todayStr = format(new Date(), 'yyyy-MM-dd');
+          const weeklyOffs = orgData?.weekly_offs || [0];
+          const holidays = holsData || [];
+          const leaves = leavesData || [];
+          const attMap: Record<string, any> = {};
+          (monthData || []).forEach(r => { attMap[r.date] = r; });
+
+          const monthDays = eachDayOfInterval({ start: startOfMonth(currentMonth), end: endOfMonth(currentMonth) });
+          // Show days up to today for past/current month
+          const eligibleDays = monthDays.filter(d => format(d, 'yyyy-MM-dd') <= todayStr);
+
+          const fullRecords = eligibleDays.map(d => {
+            const ds = format(d, 'yyyy-MM-dd');
+            const isWeekOff = weeklyOffs.includes(d.getDay());
+            const isHol = holidays.some(h => h.date === ds);
+            const hasLeave = leaves.some(l => ds >= l.start_date && ds <= l.end_date);
+            const existing = attMap[ds];
+
+            if (existing) {
+              return existing;
+            }
+            if (isWeekOff || isHol) {
+              return {
+                id: `hol-${ds}`,
+                date: ds,
+                status: 'holiday',
+                clock_in_time: null,
+                clock_out_time: null
+              };
+            }
+            if (hasLeave) {
+              return {
+                id: `leave-${ds}`,
+                date: ds,
+                status: 'approved_leave',
+                clock_in_time: null,
+                clock_out_time: null
+              };
+            }
+            // Past day without attendance -> Absent
+            return {
+              id: `absent-${ds}`,
+              date: ds,
+              status: 'absent',
+              clock_in_time: null,
+              clock_out_time: null
+            };
+          });
+
+          setRecords(fullRecords.reverse());
         }
       } catch (err: any) {
         toast({ title: 'Error', description: err.message, variant: 'destructive' });
@@ -56,18 +124,24 @@ export default function HistoryPage({ session }: { session: any }) {
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'present': return <CheckCircle2 className="w-5 h-5 text-green-600" />;
+      case 'late': return <Clock className="w-5 h-5 text-amber-600" />;
       case 'absent': return <XCircle className="w-5 h-5 text-red-600" />;
-      case 'half-day': return <AlertCircle className="w-5 h-5 text-yellow-600" />;
-      default: return null;
+      case 'half-day': case 'half_day': return <AlertCircle className="w-5 h-5 text-yellow-600" />;
+      case 'approved_leave': case 'paid_leave': return <AlertCircle className="w-5 h-5 text-purple-600" />;
+      case 'holiday': return <CheckCircle2 className="w-5 h-5 text-blue-600" />;
+      default: return <XCircle className="w-5 h-5 text-red-600" />;
     }
   };
 
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'present': return 'bg-green-50 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800';
+      case 'late': return 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800';
       case 'absent': return 'bg-red-50 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800';
-      case 'half-day': return 'bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400 dark:border-yellow-800';
-      default: return 'bg-gray-50 text-gray-700 border-gray-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700';
+      case 'half-day': case 'half_day': return 'bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400 dark:border-yellow-800';
+      case 'approved_leave': case 'paid_leave': return 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-800';
+      case 'holiday': return 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800';
+      default: return 'bg-red-50 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800';
     }
   };
 
