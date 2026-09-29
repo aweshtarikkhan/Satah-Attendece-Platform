@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { format, parseISO } from 'date-fns';
-import { CalendarDays, MapPin } from 'lucide-react';
+import { CalendarDays, MapPin, ArrowLeft } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 export default function HolidaysPage({ session }: { session: any }) {
+  const navigate = useNavigate();
   const [holidays, setHolidays] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
@@ -51,9 +54,14 @@ export default function HolidaysPage({ session }: { session: any }) {
 
   return (
     <div className="relative w-full max-w-lg mx-auto md:max-w-5xl pb-4 px-4 pt-4">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-1">Company Holidays</h1>
-        <p className="text-gray-500 dark:text-slate-400 text-sm font-medium">Public and company holidays for the year</p>
+      <div className="flex items-center justify-between mb-6 gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-1">Company Holidays</h1>
+          <p className="text-gray-500 dark:text-slate-400 text-sm font-medium">Public and company holidays for the year</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => navigate('/dashboard')} className="rounded-xl">
+          <ArrowLeft className="w-4 h-4 mr-1" /> Back
+        </Button>
       </div>
 
       {loading ? (

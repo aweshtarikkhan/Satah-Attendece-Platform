@@ -17,10 +17,27 @@ export default function Login() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
+
+    const clean = email.trim().toLowerCase();
+    const attEmail = clean.startsWith('attendance_') ? clean : `attendance_${clean}`;
+
+    // 1. First attempt sign in with attendance-namespaced email
+    let { data, error } = await supabase.auth.signInWithPassword({
+      email: attEmail,
       password,
     });
+
+    // 2. Fallback to direct clean email for legacy accounts created before namespacing
+    if (error && !clean.startsWith('attendance_')) {
+      const fallback = await supabase.auth.signInWithPassword({
+        email: clean,
+        password,
+      });
+      if (!fallback.error) {
+        error = null;
+        data = fallback.data;
+      }
+    }
 
     if (error) {
       toast({ title: 'Login Failed', description: error.message, variant: 'destructive' });

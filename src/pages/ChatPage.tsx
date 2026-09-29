@@ -1,5 +1,5 @@
 import { useLocation } from 'react-router-dom';
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -78,6 +78,34 @@ function ChatPage({ session }: { session: any }) {
   const [processingRequest, setProcessingRequest] = useState(false);
   
   const [searchQuery, setSearchQuery] = useState('');
+  const [unreadMap, setUnreadMap] = useState<Record<string, number>>({});
+  const [lastMsgTimeMap, setLastMsgTimeMap] = useState<Record<string, number>>({});
+
+  const selectedTargetRef = useRef(selectedTarget);
+  const selectedTypeRef = useRef(selectedType);
+  useEffect(() => { selectedTargetRef.current = selectedTarget; }, [selectedTarget]);
+  useEffect(() => { selectedTypeRef.current = selectedType; }, [selectedType]);
+
+  const playNotificationSound = () => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.08);
+      gain.gain.setValueAtTime(0.12, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.25);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.25);
+    } catch (e) {
+      // Audio autoplay policy
+    }
+  };
 
 const [showMentions, setShowMentions] = React.useState(false);
   const [mentionQuery, setMentionQuery] = React.useState('');
@@ -142,14 +170,30 @@ const [showMentions, setShowMentions] = React.useState(false);
   // Load current employee profile
   useEffect(() => {
     const loadEmployee = async () => {
-      const { data: empData } = await supabase
-        .from('employees')
-        .select('*')
-        .eq('auth_user_id', session.user.id)
-        .single();
-
-      if (empData) {
-        setEmployee(empData);
+      if (!session?.user) return;
+      let emp = null;
+      if (session.user.id) {
+        const { data } = await supabase
+          .from('employees')
+          .select('*')
+          .eq('auth_user_id', session.user.id)
+          .limit(1);
+        if (data && data.length > 0) emp = data[0];
+      }
+      if (!emp && session.user.email) {
+        const cleanEmail = session.user.email.replace(/^attendance_/, '');
+        const { data } = await supabase
+          .from('employees')
+          .select('*')
+          .ilike('email', cleanEmail)
+          .limit(1);
+        if (data && data.length > 0) {
+          emp = data[0];
+          await supabase.from('employees').update({ auth_user_id: session.user.id }).eq('id', emp.id);
+        }
+      }
+      if (emp) {
+        setEmployee(emp);
       }
     };
     loadEmployee();
@@ -160,14 +204,68 @@ const [showMentions, setShowMentions] = React.useState(false);
     if (!employee) return;
     
     // Load all other employees in org
-    const { data: emps } = await supabase
+    const { data: emps, error: empErr } = await supabase
       .from('employees')
-      .select('id, name, username, designation, org_id, auth_user_id')
+      .select('id, name, username, designation, org_id, auth_user_id, avatar_url')
       .eq('org_id', employee.org_id)
       .neq('id', employee.id)
       .order('name');
       
-    setEmployeeList(emps || []);
+    if (empErr) {
+      console.error('Error loading employees:', empErr);
+    }
+
+    // Load Org Manager / Owner so employee can always chat with HR & Management without creating fake employee profile
+    let managerContact: any = null;
+    try {
+      const { data: orgData } = await supabase
+        .from('organizations')
+        .select('id, name, owner_id, email')
+        .eq('id', employee.org_id)
+        .maybeSingle();
+
+      let ownerId = orgData?.owner_id;
+      if (!ownerId) {
+        const { data: om } = await supabase
+          .from('organization_members')
+          .select('user_id')
+          .eq('org_id', employee.org_id)
+          .eq('role', 'owner')
+          .maybeSingle();
+        ownerId = om?.user_id;
+      }
+
+      if (ownerId && ownerId !== employee.auth_user_id) {
+        const { data: prof } = await supabase
+          .from('profiles')
+          .select('id, user_id, first_name, last_name, avatar_url')
+          .eq('user_id', ownerId)
+          .maybeSingle();
+
+        const managerName = prof?.first_name
+          ? `${prof.first_name} ${prof.last_name || ''}`.trim()
+          : (orgData?.email ? orgData.email.split('@')[0] : 'HR & Admin');
+
+        managerContact = {
+          id: ownerId,
+          name: managerName,
+          username: 'hr_admin',
+          designation: 'HR & Admin',
+          org_id: employee.org_id,
+          auth_user_id: ownerId,
+          avatar_url: prof?.avatar_url || null,
+          is_manager: true
+        };
+      }
+    } catch (e) {
+      console.error('Error loading manager contact:', e);
+    }
+
+    const allContacts = managerContact
+      ? [managerContact, ...(emps || []).filter(e => e.auth_user_id !== managerContact.id && e.id !== managerContact.id)]
+      : (emps || []);
+
+    setEmployeeList(allContacts);
 
     // Load connections
     const { data: conns } = await supabase
@@ -180,21 +278,56 @@ const [showMentions, setShowMentions] = React.useState(false);
     // Load groups user is part of
     const { data: grps } = await supabase
       .from('chat_groups')
-      .select('id, name, created_at, chat_group_members!inner(employee_id)')
+      .select('id, name, created_at, created_by, chat_group_members!inner(employee_id)')
       .eq('org_id', employee.org_id)
       .eq('chat_group_members.employee_id', employee.id)
       .order('created_at');
       
     setGroupList(grps || []);
+
+    // Load unread counts and recent message activity
+    try {
+      const { data: recentMsgs } = await supabase
+        .from('chat_messages')
+        .select('id, sender_id, receiver_id, group_id, status, created_at')
+        .or(`receiver_id.eq.${employee.id},sender_id.eq.${employee.id}`)
+        .order('created_at', { ascending: false })
+        .limit(300);
+
+      if (recentMsgs) {
+        const unreads: Record<string, number> = {};
+        const lastTimes: Record<string, number> = {};
+        for (const m of recentMsgs) {
+          const otherId = m.sender_id === employee.id ? m.receiver_id : m.sender_id;
+          const targetKey = m.group_id || otherId;
+          const msgTime = new Date(m.created_at).getTime();
+          if (targetKey && (!lastTimes[targetKey] || msgTime > lastTimes[targetKey])) {
+            lastTimes[targetKey] = msgTime;
+          }
+          if (m.receiver_id === employee.id && m.status === 'sent') {
+            unreads[m.sender_id] = (unreads[m.sender_id] || 0) + 1;
+          }
+        }
+        setUnreadMap(unreads);
+        setLastMsgTimeMap(lastTimes);
+      }
+    } catch (e) {
+      // ignore
+    }
   };
 
   useEffect(() => {
     loadSidebarData();
+    const interval = setInterval(() => {
+      loadSidebarData();
+    }, 4000);
+    return () => clearInterval(interval);
   }, [employee]);
 
   // Read messages when opened
   const markMessagesAsRead = async (targetId: string, type: string) => {
     if (!employee) return;
+    setUnreadMap(prev => ({ ...prev, [targetId]: 0 }));
     let query = supabase.from('chat_messages').update({ status: 'read' }).eq('status', 'sent');
     
     if (type === 'dm') {
@@ -204,21 +337,24 @@ const [showMentions, setShowMentions] = React.useState(false);
     }
     
     await query;
+    window.dispatchEvent(new CustomEvent('chat-read', { detail: { targetId, type } }));
   };
 
-  // Load messages when target changes
+  // Load messages when target changes + 2.5s fast sync polling fallback
   useEffect(() => {
     if (!employee || !selectedTarget || !selectedType) {
       setMessages([]);
       return;
     }
 
-    const loadMessages = async () => {
+    let isSubscribed = true;
+
+    const loadMessages = async (isInitial = false) => {
       try {
-        setLoading(true);
+        if (isInitial) setLoading(true);
         let query = supabase
           .from('chat_messages')
-          .select('*, sender:employees!sender_id(id, name, username)')
+          .select('*')
           .order('created_at', { ascending: true });
 
         if (selectedType === 'dm' || selectedType === 'request') {
@@ -228,62 +364,116 @@ const [showMentions, setShowMentions] = React.useState(false);
         }
 
         const { data, error } = await query;
+        if (!isSubscribed) return;
         if (error) throw error;
-        setMessages(data || []);
         
-        // Mark as read if it's an accepted DM or Group
+        if (data) {
+          setMessages(prev => {
+            const map = new Map<string, any>();
+            for (const m of prev) {
+              map.set(m.id, m);
+            }
+            for (const d of data) {
+              for (const [k, v] of map.entries()) {
+                if (String(k).startsWith("temp-") && v.message === d.message && v.sender_id === d.sender_id) {
+                  map.delete(k);
+                }
+              }
+              const senderObj = d.sender_id === employee?.id 
+                ? { id: employee.id, name: employee.name || 'You', username: employee.username } 
+                : (employeeList.find((e: any) => e.id === d.sender_id) || { id: d.sender_id, name: 'Employee' });
+              map.set(d.id, { ...map.get(d.id), ...d, sender: senderObj });
+            }
+            return Array.from(map.values()).sort(
+              (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+            );
+          });
+        }
+        
+        // Auto mark as read if it's an accepted DM or Group
         if (selectedType === 'dm' || selectedType === 'group') {
           await markMessagesAsRead(selectedTarget.id, selectedType);
         }
       } catch (err: any) {
-        toast({ title: 'Error', description: err.message, variant: 'destructive' });
+        if (isInitial) {
+          toast({ title: 'Error', description: err.message, variant: 'destructive' });
+        }
       } finally {
-        setLoading(false);
+        if (isInitial && isSubscribed) {
+          setLoading(false);
+        }
       }
     };
 
-    loadMessages();
-  }, [employee, selectedTarget, selectedType]);
+    loadMessages(true);
 
-  // Realtime subscription
+    // Fast sync poll fallback every 2.5 seconds
+    const pollInterval = setInterval(() => {
+      loadMessages(false);
+    }, 2500);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(pollInterval);
+    };
+  }, [employee?.id, selectedTarget?.id, selectedType]);
+
+  // Realtime subscription (stable channel)
   useEffect(() => {
     if (!employee) return;
 
     const channel = supabase
-      .channel('chat-realtime')
+      .channel(`chat-realtime-${employee.id}`)
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'chat_messages' },
         async (payload) => {
           const msg = payload.new as any;
           if (msg.sender_id === employee.id || msg.receiver_id === employee.id || msg.group_id) {
+            const currentTarget = selectedTargetRef.current;
+            const currentType = selectedTypeRef.current;
             let isRelevant = false;
-            if ((selectedType === 'dm' || selectedType === 'request') && selectedTarget) {
-              isRelevant = !msg.group_id && (msg.sender_id === selectedTarget.id || msg.receiver_id === selectedTarget.id);
-            } else if (selectedType === 'group' && selectedTarget) {
-              isRelevant = msg.group_id === selectedTarget.id;
+
+            if ((currentType === 'dm' || currentType === 'request') && currentTarget) {
+              isRelevant = !msg.group_id && (msg.sender_id === currentTarget.id || msg.receiver_id === currentTarget.id);
+            } else if (currentType === 'group' && currentTarget) {
+              isRelevant = msg.group_id === currentTarget.id;
+            }
+
+            const targetKey = msg.group_id || (msg.sender_id === employee.id ? msg.receiver_id : msg.sender_id);
+            if (targetKey) {
+              setLastMsgTimeMap(prev => ({ ...prev, [targetKey]: Date.now() }));
             }
 
             if (isRelevant) {
-              const { data: senderData } = await supabase.from('employees').select('id, name, username').eq('id', msg.sender_id).single();
+              let senderData: any = employeeList.find((e: any) => e.id === msg.sender_id);
+              if (!senderData) {
+                const { data } = await supabase.from('employees').select('id, name, username').eq('id', msg.sender_id).maybeSingle();
+                senderData = data || (currentTarget?.id === msg.sender_id ? currentTarget : { id: msg.sender_id, name: 'HR Admin' });
+              }
               const enrichedMsg = { ...msg, sender: senderData };
               
               setMessages(prev => {
                 if (prev.find(m => m.id === enrichedMsg.id)) return prev;
-                return [...prev, enrichedMsg];
+                const filtered = prev.filter(m => !(String(m.id).startsWith('temp-') && m.message === enrichedMsg.message && m.sender_id === enrichedMsg.sender_id));
+                return [...filtered, enrichedMsg];
               });
-              
-              // Mark as read immediately if chat is open
-              if (selectedType === 'dm' || selectedType === 'group') {
-                if (msg.sender_id !== employee.id) {
+
+              if (msg.sender_id !== employee.id) {
+                playNotificationSound();
+                if (currentType === 'dm' || currentType === 'group') {
                   await supabase.from('chat_messages').update({ status: 'read' }).eq('id', msg.id);
+                  window.dispatchEvent(new CustomEvent('chat-read', { detail: { targetId: currentTarget.id } }));
                 }
               }
             } else {
-              // Reload sidebar if a new connection might be formed
-              if (!msg.group_id && msg.receiver_id === employee.id) {
-                loadSidebarData();
+              if (msg.sender_id !== employee.id) {
+                playNotificationSound();
+                if (targetKey) {
+                  setUnreadMap(prev => ({ ...prev, [targetKey]: (prev[targetKey] || 0) + 1 }));
+                }
               }
+              loadSidebarData();
             }
           }
         }
@@ -314,32 +504,10 @@ const [showMentions, setShowMentions] = React.useState(false);
       )
       .subscribe();
 
-  
-
-  const connectionsMap = connections.reduce((acc: any, conn: any) => {
-    const otherId = conn.sender_id === employee?.id ? conn.receiver_id : conn.sender_id;
-    acc[otherId] = conn;
-    return acc;
-  }, {});
-
-  const requests = connections.filter(c => c.status === 'pending' && c.receiver_id === employee?.id);
-  const pendingRequestsCount = requests.length;
-
-  const filteredEmployees = employeeList.filter(emp => 
-    emp.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    emp.username.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  const handleUserSelect = (emp: any) => {
-      setSelectedTarget(emp);
-      setSelectedType('dm');
-      setSelectedConnection(null);
-    };
-
-  return () => {
+    return () => {
       supabase.removeChannel(channel);
     };
-  }, [employee, selectedTarget, selectedType, selectedConnection]);
+  }, [employee?.id, selectedConnection?.id]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -350,9 +518,28 @@ const [showMentions, setShowMentions] = React.useState(false);
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMessage.trim() || !employee || !selectedTarget) return;
+    const trimmed = newMessage.trim();
+    if (!trimmed || !employee || !selectedTarget) return;
 
+    const tempId = 'temp-' + Date.now();
+    const optimisticMsg: any = {
+      id: tempId,
+      org_id: employee.org_id,
+      sender_id: employee.id,
+      receiver_id: selectedType === 'dm' ? selectedTarget.id : null,
+      group_id: selectedType === 'group' ? selectedTarget.id : null,
+      message: trimmed,
+      status: 'sent',
+      created_at: new Date().toISOString(),
+      sender: { id: employee.id, name: employee.name, username: employee.username }
+    };
+
+    // Instant 0ms optimistic display
+    setMessages(prev => [...prev, optimisticMsg]);
+    setNewMessage("");
     setSending(true);
+    setLastMsgTimeMap(prev => ({ ...prev, [selectedTarget.id]: Date.now() }));
+
     try {
       // Create connection if sending first DM
       if (selectedType === 'dm' && !selectedConnection) {
@@ -362,16 +549,15 @@ const [showMentions, setShowMentions] = React.useState(false);
           receiver_id: selectedTarget.id,
           status: 'accepted'
         }).select().single();
-        if (!connErr) {
+        if (!connErr && newConn) {
           setSelectedConnection(newConn);
-          // Don't change selectedType, let receiver handle the request
         }
       }
 
-            const payload: any = {
+      const payload: any = {
         org_id: employee.org_id,
         sender_id: employee.id,
-        message: newMessage.trim(),
+        message: trimmed,
         status: 'sent'
       };
       
@@ -384,13 +570,16 @@ const [showMentions, setShowMentions] = React.useState(false);
       const { error, data: insertedMsg } = await supabase.from('chat_messages').insert(payload).select().single();
       if (error) throw error;
       
+      if (insertedMsg) {
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...insertedMsg, sender: optimisticMsg.sender } : m));
+      }
+
       // Notify recipients consistently
       if (selectedType === 'group') {
         const { data: members } = await supabase.from('chat_group_members')
           .select('employee_id')
           .eq('group_id', selectedTarget.id);
         if (members && members.length > 0) {
-          // Fetch auth_user_id for each member (excluding sender)
           const otherMemberIds = members
             .map(m => m.employee_id)
             .filter(id => id !== employee.id);
@@ -408,7 +597,7 @@ const [showMentions, setShowMentions] = React.useState(false);
                 title: "New message in " + selectedTarget.name,
                 message: employee.name + ": " + payload.message.substring(0, 50) + (payload.message.length > 50 ? '...' : ''),
                 type: 'chat',
-                reference_id: 'chat-' + insertedMsg.id
+                reference_id: insertedMsg?.id || null
               }));
               
             if (notificationsToInsert.length > 0) {
@@ -417,21 +606,21 @@ const [showMentions, setShowMentions] = React.useState(false);
           }
         }
       } else if (selectedType === 'dm') {
-          const { data: targetUser } = await supabase.from('employees').select('auth_user_id').eq('id', selectedTarget.id).single();
-          if (targetUser?.auth_user_id) {
-             await supabase.from('notifications').insert({
-                org_id: employee.org_id,
-                user_id: targetUser.auth_user_id,
-                title: "New message from " + employee.name,
-                message: payload.message.substring(0, 50) + (payload.message.length > 50 ? '...' : ''),
-                type: 'chat',
-                reference_id: 'chat-' + insertedMsg.id
-             });
-          }
+        const { data: targetUser } = await supabase.from('employees').select('auth_user_id').eq('id', selectedTarget.id).maybeSingle();
+        const notifyTargetId = targetUser?.auth_user_id || selectedTarget.auth_user_id || (selectedTarget.is_manager ? selectedTarget.id : null);
+        if (notifyTargetId) {
+          await supabase.from('notifications').insert({
+            org_id: employee.org_id,
+            user_id: notifyTargetId,
+            title: "New message from " + employee.name,
+            message: payload.message.substring(0, 50) + (payload.message.length > 50 ? '...' : ''),
+            type: 'chat',
+            reference_id: insertedMsg?.id || null
+          });
+        }
       }
-
-      setNewMessage("");
     } catch (err: any) {
+      setMessages(prev => prev.filter(m => m.id !== tempId));
       toast({ title: 'Failed to send', description: err.message, variant: 'destructive' });
     } finally {
       setSending(false);
@@ -498,13 +687,9 @@ const [showMentions, setShowMentions] = React.useState(false);
     }
   };
 
-  if (!employee) {
-    return <div className="flex items-center justify-center h-full dark:text-slate-300">Loading...</div>;
-  }
-
   // Derived lists
-  const pendingRequests = connections.filter(c => c.receiver_id === employee.id && c.status === 'pending');
-  const activeConnections = connections.filter(c => c.status === 'accepted' || (c.sender_id === employee.id && c.status === 'pending'));
+  const pendingRequests = connections.filter(c => c.receiver_id === employee?.id && c.status === 'pending');
+  const activeConnections = connections.filter(c => c.status === 'accepted' || (c.sender_id === employee?.id && c.status === 'pending'));
 
   const pendingUsers = pendingRequests.map(c => {
     const u = employeeList.find(e => e.id === c.sender_id);
@@ -531,7 +716,56 @@ const [showMentions, setShowMentions] = React.useState(false);
     (emp?.username || '').toLowerCase().includes((searchQuery || '').toLowerCase())
   );
 
+  // Dynamic sorting: whoever sent the latest message or has unread messages jumps to the TOP!
+  const sortedGroupList = useMemo(() => {
+    return [...groupList].sort((a, b) => {
+      const unreadA = unreadMap[a.id] || 0;
+      const unreadB = unreadMap[b.id] || 0;
+      if (unreadA > 0 && unreadB === 0) return -1;
+      if (unreadB > 0 && unreadA === 0) return 1;
+      const timeA = lastMsgTimeMap[a.id] || 0;
+      const timeB = lastMsgTimeMap[b.id] || 0;
+      if (timeA !== timeB) return timeB - timeA;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+  }, [groupList, unreadMap, lastMsgTimeMap]);
+
+  const isHrOrMgmt = (des?: string) => {
+    if (!des) return false;
+    const d = des.toLowerCase();
+    return d.includes('hr') || d.includes('admin') || d.includes('manager') || d.includes('owner') || d.includes('director') || d.includes('founder') || d.includes('management');
+  };
+
+  const hrEmployees = useMemo(() => {
+    const list = filteredEmployees.filter(e => isHrOrMgmt(e.designation));
+    return [...list].sort((a, b) => {
+      const unreadA = unreadMap[a.id] || 0;
+      const unreadB = unreadMap[b.id] || 0;
+      if (unreadA > 0 && unreadB === 0) return -1;
+      if (unreadB > 0 && unreadA === 0) return 1;
+      const timeA = lastMsgTimeMap[a.id] || 0;
+      const timeB = lastMsgTimeMap[b.id] || 0;
+      if (timeA !== timeB) return timeB - timeA;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+  }, [filteredEmployees, unreadMap, lastMsgTimeMap]);
+
+  const colleagueEmployees = useMemo(() => {
+    const list = filteredEmployees.filter(e => !isHrOrMgmt(e.designation));
+    return [...list].sort((a, b) => {
+      const unreadA = unreadMap[a.id] || 0;
+      const unreadB = unreadMap[b.id] || 0;
+      if (unreadA > 0 && unreadB === 0) return -1;
+      if (unreadB > 0 && unreadA === 0) return 1;
+      const timeA = lastMsgTimeMap[a.id] || 0;
+      const timeB = lastMsgTimeMap[b.id] || 0;
+      if (timeA !== timeB) return timeB - timeA;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+  }, [filteredEmployees, unreadMap, lastMsgTimeMap]);
+
   const handleUserSelect = (emp: any) => {
+    setUnreadMap(prev => ({ ...prev, [emp.id]: 0 }));
     const conn = connectionsMap[emp.id];
     setSelectedTarget(emp);
     
@@ -547,6 +781,10 @@ const [showMentions, setShowMentions] = React.useState(false);
       setSelectedConnection(conn);
     }
   };
+
+  if (!employee) {
+    return <div className="flex items-center justify-center h-full dark:text-slate-300">Loading...</div>;
+  }
 
   return (
     <div className="flex-1 min-h-0 flex flex-col pb-4 px-2 pt-2">
@@ -573,101 +811,160 @@ const [showMentions, setShowMentions] = React.useState(false);
                       <Plus className="w-4 h-4" />
                     </button>
                   </div>
-                  {groupList.length === 0 ? (
+                  {sortedGroupList.length === 0 ? (
                     <p className="text-xs text-gray-400 px-2 italic font-medium">No groups yet.</p>
                   ) : (
-                    groupList.map(group => (
-                      <button
-                        key={`group-${group.id}`}
-                        onClick={() => { setSelectedType('group'); setSelectedTarget(group); }}
-                        className={`w-full flex items-center gap-3 p-3 rounded-2xl transition-all ${
-                          selectedType === 'group' && selectedTarget?.id === group.id
-                            ? 'bg-orange-50 dark:bg-slate-700'
-                            : 'hover:bg-gray-50 dark:hover:bg-slate-700/50 text-gray-700 dark:text-slate-300'
-                        }`}
-                      >
-                        <div className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 bg-orange-100 dark:bg-slate-800 text-orange-600 font-bold text-lg">
-    {group.name.substring(0, 2).toUpperCase()}
-  </div>
-                        <div className="flex-1 text-left overflow-hidden">
-                          <p className="text-sm font-bold truncate text-gray-900 dark:text-white">{group.name}</p>
-                          <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
-                            {group.created_by === employee?.id ? 'Admin' : 'Member'}
-                          </p>
-                        </div>
-                      </button>
-                    ))
+                    sortedGroupList.map(group => {
+                      const unread = unreadMap[group.id] || 0;
+                      return (
+                        <button
+                          key={`group-${group.id}`}
+                          onClick={() => {
+                            setUnreadMap(prev => ({ ...prev, [group.id]: 0 }));
+                            setSelectedType('group');
+                            setSelectedTarget(group);
+                          }}
+                          className={`w-full flex items-center gap-3 p-3 rounded-2xl transition-all ${
+                            selectedType === 'group' && selectedTarget?.id === group.id
+                              ? 'bg-orange-50 dark:bg-slate-700'
+                               : 'hover:bg-gray-50 dark:hover:bg-slate-700/50 text-gray-700 dark:text-slate-300'
+                          }`}
+                        >
+                          <div className="relative">
+                            <div className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 bg-orange-100 dark:bg-slate-800 text-orange-600 font-bold text-lg">
+                              {group.name.substring(0, 2).toUpperCase()}
+                            </div>
+                            {unread > 0 && (
+                              <span className="absolute -top-1 -right-1 h-3.5 w-3.5 rounded-full bg-red-500 border-2 border-white dark:border-slate-800 animate-pulse" />
+                            )}
+                          </div>
+                          <div className="flex-1 text-left overflow-hidden">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <p className="text-sm font-bold truncate text-gray-900 dark:text-white">{group.name}</p>
+                                {unread > 0 && (
+                                  <span className="h-2.5 w-2.5 rounded-full bg-red-500 shrink-0 animate-pulse" />
+                                )}
+                              </div>
+                              {unread > 0 && (
+                                <span className="flex h-5 min-w-[20px] px-1 shrink-0 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white shadow-sm">
+                                  {unread}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                              {group.created_by === employee?.id ? 'Admin' : 'Member'}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })
                   )}
                 </div>
 
                 {/* HR & Management Section */}
-                  <div className="mb-4 mt-6">
-                    <div className="px-2 mb-2">
-                      <span className="text-[10px] font-bold text-gray-400 dark:text-slate-500 uppercase tracking-wider">HR & Management</span>
-                    </div>
-                    {filteredEmployees.filter(e => e.designation?.toLowerCase().includes('hr') || e.designation?.toLowerCase().includes('admin') || e.designation?.toLowerCase().includes('manager')).map(emp => {
-                        return (
-                          <button
-                            key={`emp-${emp.id}`}
-                            onClick={() => handleUserSelect(emp)}
-                            className={`w-full flex items-center gap-3 p-3 rounded-2xl transition-all ${
-                              selectedType === 'dm' && selectedTarget?.id === emp.id
-                                ? 'bg-orange-50 dark:bg-orange-900/20 shadow-sm border border-orange-100 dark:border-orange-900/50'
-                                : 'hover:bg-gray-50 dark:hover:bg-slate-800/50 border border-transparent'
-                            }`}
-                          >
-                            <div className="relative">
-                              <div className="w-12 h-12 rounded-2xl bg-orange-100 text-orange-600 flex items-center justify-center font-bold text-lg shadow-sm overflow-hidden">
-    {emp.avatar_url || emp.profile_image ? <img src={emp.avatar_url || emp.profile_image} className="w-full h-full object-cover" alt="" /> : (emp.name || '?').charAt(0)}
-  </div>
-                            </div>
-                            <div className="text-left flex-1 min-w-0">
-                              <p className="text-sm font-bold text-gray-900 dark:text-white truncate">
-                                {emp.name} <span className="ml-2 inline-flex items-center text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full uppercase tracking-wider font-bold">{emp.designation || 'HR'}</span>
-                              </p>
-                              <p className="text-xs font-medium text-gray-500 truncate">
-                                @{emp.username || emp.name.toLowerCase().replace(/\s+/g, '')}
-                              </p>
-                            </div>
-                          </button>
-                        );
-                    })}
+                <div className="mb-4 mt-6">
+                  <div className="px-2 mb-2">
+                    <span className="text-[10px] font-bold text-gray-400 dark:text-slate-500 uppercase tracking-wider">HR & Management</span>
                   </div>
-
-                  {/* Direct Messages Section */}
-                  <div>
-                    <div className="px-2 mb-2">
-                      <span className="text-[10px] font-bold text-gray-400 dark:text-slate-500 uppercase tracking-wider">Colleagues</span>
-                    </div>
-                    {filteredEmployees.filter(e => !(e.designation?.toLowerCase().includes('hr') || e.designation?.toLowerCase().includes('admin') || e.designation?.toLowerCase().includes('manager'))).length === 0 ? (
-                      <p className="text-xs text-gray-400 px-2 italic font-medium">No users found.</p>
-                    ) : (
-                      filteredEmployees.filter(e => !(e.designation?.toLowerCase().includes('hr') || e.designation?.toLowerCase().includes('admin') || e.designation?.toLowerCase().includes('manager'))).map(emp => {
-                        return (
-                          <button
-                            key={`emp-${emp.id}`}
-                            onClick={() => handleUserSelect(emp)}
-                            className={`w-full flex items-center gap-3 p-3 rounded-2xl transition-all ${
-                              selectedType === 'dm' && selectedTarget?.id === emp.id
-                                ? 'bg-orange-50 dark:bg-orange-900/20 shadow-sm border border-orange-100 dark:border-orange-900/50'
-                                : 'hover:bg-gray-50 dark:hover:bg-slate-800/50 border border-transparent'
-                            }`}
-                          >
-                            <div className="relative">
-                              <div className="w-12 h-12 rounded-2xl bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300 flex items-center justify-center font-bold text-lg shadow-sm overflow-hidden">
-    {emp.avatar_url || emp.profile_image ? <img src={emp.avatar_url || emp.profile_image} className="w-full h-full object-cover" alt="" /> : (emp.name || '?').charAt(0)}
-  </div>
-                            </div>
-                            <div className="text-left flex-1 min-w-0">
-                              <p className="text-sm font-bold text-gray-900 dark:text-white truncate">{emp.name}</p>
-                              <p className="text-xs font-medium text-gray-500 truncate">
-                                @{emp.username || emp.name.toLowerCase().replace(/\s+/g, '')}
+                  {hrEmployees.map(emp => {
+                    const unread = unreadMap[emp.id] || 0;
+                    return (
+                      <button
+                        key={`emp-${emp.id}`}
+                        onClick={() => handleUserSelect(emp)}
+                        className={`w-full flex items-center gap-3 p-3 rounded-2xl transition-all ${
+                          selectedType === 'dm' && selectedTarget?.id === emp.id
+                            ? 'bg-orange-50 dark:bg-orange-900/20 shadow-sm border border-orange-100 dark:border-orange-900/50'
+                            : 'hover:bg-gray-50 dark:hover:bg-slate-800/50 border border-transparent'
+                        }`}
+                      >
+                        <div className="relative">
+                          <div className="w-12 h-12 rounded-2xl bg-orange-100 text-orange-600 flex items-center justify-center font-bold text-lg shadow-sm overflow-hidden">
+                            {emp.avatar_url ? <img src={emp.avatar_url} className="w-full h-full object-cover" alt="" /> : (emp.name || '?').charAt(0)}
+                          </div>
+                          {unread > 0 && (
+                            <span className="absolute -top-1 -right-1 h-3.5 w-3.5 rounded-full bg-red-500 border-2 border-white dark:border-slate-800 animate-pulse" />
+                          )}
+                        </div>
+                        <div className="text-left flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <p className="text-sm font-bold text-gray-900 dark:text-white truncate">
+                                {emp.name}
                               </p>
+                              {unread > 0 && (
+                                <span className="h-2.5 w-2.5 rounded-full bg-red-500 shrink-0 animate-pulse" />
+                              )}
+                              <span className="ml-1 inline-flex items-center text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full uppercase tracking-wider font-bold shrink-0">
+                                {emp.designation || 'HR'}
+                              </span>
                             </div>
-                          </button>
-                        );
-                      })
-                    )}
+                            {unread > 0 && (
+                              <span className="flex h-5 min-w-[20px] px-1 shrink-0 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white shadow-sm">
+                                {unread}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs font-medium text-gray-500 truncate">
+                            @{emp.username || emp.name.toLowerCase().replace(/\s+/g, '')}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Direct Messages Section */}
+                <div>
+                  <div className="px-2 mb-2">
+                    <span className="text-[10px] font-bold text-gray-400 dark:text-slate-500 uppercase tracking-wider">Colleagues</span>
+                  </div>
+                  {colleagueEmployees.length === 0 ? (
+                    <p className="text-xs text-gray-400 px-2 italic font-medium">No users found.</p>
+                  ) : (
+                    colleagueEmployees.map(emp => {
+                      const unread = unreadMap[emp.id] || 0;
+                      return (
+                        <button
+                          key={`emp-${emp.id}`}
+                          onClick={() => handleUserSelect(emp)}
+                          className={`w-full flex items-center gap-3 p-3 rounded-2xl transition-all ${
+                            selectedType === 'dm' && selectedTarget?.id === emp.id
+                              ? 'bg-orange-50 dark:bg-orange-900/20 shadow-sm border border-orange-100 dark:border-orange-900/50'
+                              : 'hover:bg-gray-50 dark:hover:bg-slate-800/50 border border-transparent'
+                          }`}
+                        >
+                          <div className="relative">
+                            <div className="w-12 h-12 rounded-2xl bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300 flex items-center justify-center font-bold text-lg shadow-sm overflow-hidden">
+                              {emp.avatar_url ? <img src={emp.avatar_url} className="w-full h-full object-cover" alt="" /> : (emp.name || '?').charAt(0)}
+                            </div>
+                            {unread > 0 && (
+                              <span className="absolute -top-1 -right-1 h-3.5 w-3.5 rounded-full bg-red-500 border-2 border-white dark:border-slate-800 animate-pulse" />
+                            )}
+                          </div>
+                          <div className="text-left flex-1 min-w-0">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <p className="text-sm font-bold text-gray-900 dark:text-white truncate">{emp.name}</p>
+                                {unread > 0 && (
+                                  <span className="h-2.5 w-2.5 rounded-full bg-red-500 shrink-0 animate-pulse" />
+                                )}
+                              </div>
+                              {unread > 0 && (
+                                <span className="flex h-5 min-w-[20px] px-1 shrink-0 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white shadow-sm">
+                                  {unread}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs font-medium text-gray-500 truncate">
+                              @{emp.username || emp.name.toLowerCase().replace(/\s+/g, '')}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })
+                  )}
                 </div>
               </>
           </div>

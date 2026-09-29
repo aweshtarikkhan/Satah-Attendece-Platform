@@ -1,14 +1,16 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { format, startOfMonth, endOfMonth, parseISO, subMonths, eachDayOfInterval, startOfWeek, endOfWeek, isSameMonth, isSameDay } from 'date-fns';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { ChevronLeft, ChevronRight, CheckCircle2, XCircle, AlertCircle, Clock } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CheckCircle2, XCircle, AlertCircle, Clock, ArrowLeft } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { getEffectiveAttendanceStatus } from '@/lib/shift-utils';
 import { RegularizeDialog } from '@/components/shared/RegularizeDialog';
 
 export default function HistoryPage({ session }: { session: any }) {
+  const navigate = useNavigate();
   const [employee, setEmployee] = useState<any>(null);
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [records, setRecords] = useState<any[]>([]);
@@ -246,13 +248,18 @@ export default function HistoryPage({ session }: { session: any }) {
       <div className="relative z-10 space-y-5 mt-4">
         {/* Header and Month Selector */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="text-gray-900 dark:text-white">
-            <h1 className="text-2xl font-bold mb-1">Attendance History</h1>
-            {employeeShift && (
-              <p className="text-xs opacity-90 font-medium text-slate-500 dark:text-slate-400">
-                Shift: {employeeShift.name} ({employeeShift.start_time?.slice(0,5)} - {employeeShift.end_time?.slice(0,5)}) &bull; Grace: {employeeShift.grace_minutes ?? 15}m
-              </p>
-            )}
+          <div className="flex items-center gap-3">
+            <Button variant="outline" size="sm" onClick={() => navigate('/dashboard')} className="rounded-xl h-9">
+              <ArrowLeft className="w-4 h-4 mr-1" /> Back
+            </Button>
+            <div className="text-gray-900 dark:text-white">
+              <h1 className="text-2xl font-bold mb-0.5">Attendance History</h1>
+              {employeeShift && (
+                <p className="text-xs opacity-90 font-medium text-slate-500 dark:text-slate-400">
+                  Shift: {employeeShift.name} ({employeeShift.start_time?.slice(0,5)} - {employeeShift.end_time?.slice(0,5)}) &bull; Grace: {employeeShift.grace_minutes ?? 15}m
+                </p>
+              )}
+            </div>
           </div>
           
           <div className="flex items-center space-x-4 bg-white dark:bg-slate-800 px-5 py-2.5 rounded-full shadow-sm border border-gray-100 dark:border-slate-700 self-start sm:self-auto shrink-0 w-full sm:w-auto justify-between sm:justify-start">

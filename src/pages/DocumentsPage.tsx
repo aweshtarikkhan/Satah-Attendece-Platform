@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -8,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { format, parseISO } from 'date-fns';
-import { FileText, Eye, ExternalLink, Download, Upload, Loader2, FileCheck, Plus } from 'lucide-react';
+import { FileText, Eye, ExternalLink, Download, Upload, Loader2, FileCheck, Plus, ArrowLeft } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 const DOC_TYPES = ["Aadhaar", "PAN", "Offer Letter", "Appointment Letter", "Salary Slip", "Bank Proof", "Resume", "Other"];
@@ -17,6 +18,7 @@ const isImage = (name?: string) => /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(name |
 const isPdf = (name?: string) => /\.pdf$/i.test(name || "");
 
 export default function DocumentsPage({ session }: { session: any }) {
+  const navigate = useNavigate();
   const [employee, setEmployee] = useState<any>(null);
   const [docs, setDocs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -160,21 +162,31 @@ export default function DocumentsPage({ session }: { session: any }) {
   return (
     <div className="relative w-full max-w-lg mx-auto md:max-w-4xl pb-24 px-4 pt-4">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-1">My Documents</h1>
           <p className="text-gray-500 dark:text-slate-400 text-sm font-medium">View and download your official documents</p>
         </div>
-        <Button
-          onClick={() => setShowUpload(!showUpload)}
-          className="bg-orange-500 hover:bg-orange-600 text-white rounded-xl shadow-sm font-semibold text-xs px-3 h-9"
-        >
-          {showUpload ? 'Close' : (
-            <>
-              <Plus className="w-4 h-4 mr-1" /> Upload
-            </>
-          )}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => navigate('/dashboard')}
+            className="rounded-xl font-semibold text-xs h-9"
+          >
+            <ArrowLeft className="w-4 h-4 mr-1" /> Back
+          </Button>
+          <Button
+            onClick={() => setShowUpload(!showUpload)}
+            className="bg-orange-500 hover:bg-orange-600 text-white rounded-xl shadow-sm font-semibold text-xs px-3 h-9"
+          >
+            {showUpload ? 'Close' : (
+              <>
+                <Plus className="w-4 h-4 mr-1" /> Upload
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       {/* Upload Form Modal / Collapsible */}

@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
-import { Mail, Lock, User, Phone, MapPin, Calendar, ShieldCheck, Key, Camera, Loader2 } from 'lucide-react';
+import { Mail, Lock, User, Phone, MapPin, Calendar, ShieldCheck, Key, Camera, Loader2, ArrowLeft } from 'lucide-react';
 
 export default function ProfilePage() {
+  const navigate = useNavigate();
   const [employee, setEmployee] = useState<any>(null);
   const [userEmail, setUserEmail] = useState('');
   
@@ -41,7 +43,6 @@ export default function ProfilePage() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
-        setUserEmail(user.email || '');
         setIsEmailVerified(!!user.email_confirmed_at);
         
         const { data: empData } = await supabase
@@ -50,6 +51,9 @@ export default function ProfilePage() {
           .eq('auth_user_id', user.id)
           .single();
           
+        const displayEmail = (empData?.email || user.email || '').replace(/^attendance_/, '');
+        setUserEmail(displayEmail);
+
         if (empData) {
           setEmployee(empData);
           setPhone(empData.phone_number || empData.phone || '');
@@ -267,7 +271,17 @@ export default function ProfilePage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 pb-4 px-4 pt-4">
-      <div className="flex flex-col items-center justify-center mb-8 mt-4">
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">My Profile</h1>
+          <p className="text-xs text-muted-foreground">Manage your personal and account details</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => navigate('/dashboard')} className="rounded-xl">
+          <ArrowLeft className="w-4 h-4 mr-1" /> Back
+        </Button>
+      </div>
+
+      <div className="flex flex-col items-center justify-center mb-8 mt-2">
         <div className="relative group mb-4">
           <div className="w-24 h-24 rounded-full bg-orange-100 flex items-center justify-center text-orange-600 font-bold text-4xl shadow-sm overflow-hidden border-2 border-white dark:border-slate-800">
             {avatar ? (

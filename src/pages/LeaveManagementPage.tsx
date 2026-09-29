@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { format, parseISO } from "date-fns";
-import { Umbrella, CheckCircle2, XCircle, Clock, ChevronRight, CalendarIcon } from "lucide-react";
+import { Umbrella, CheckCircle2, XCircle, Clock, ChevronRight, CalendarIcon, ArrowLeft } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription
@@ -10,7 +11,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
-import { cn } from "@/lib/utils";
+import { cn, safeFormatDate } from "@/lib/utils";
 
 
 const LEAVE_OPTIONS = [
@@ -25,6 +26,7 @@ const LEAVE_OPTIONS = [
 ];
 
 export default function LeaveManagementPage({ session }: { session: any }) {
+  const navigate = useNavigate();
   const [employee, setEmployee] = useState<any>(null);
   const [leaves, setLeaves] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -33,6 +35,8 @@ export default function LeaveManagementPage({ session }: { session: any }) {
   const { toast } = useToast();
   const [leaveBalances, setLeaveBalances] = useState<Record<string, { used: number; accrued: number; annual: number }>>({});
   const [insufficientError, setInsufficientError] = useState<{remaining: number, days: number, typeName: string} | null>(null);
+  const [withdrawDialogOpen, setWithdrawDialogOpen] = useState(false);
+  const [leaveToWithdraw, setLeaveToWithdraw] = useState<string | null>(null);
 
   const [leaveData, setLeaveData] = useState({
     startDate: "",
@@ -107,6 +111,7 @@ export default function LeaveManagementPage({ session }: { session: any }) {
           return;
         }
       }
+
       const { error } = await supabase.from("leaves").insert({
         org_id: employee.org_id,
         employee_id: employee.id,
@@ -136,10 +141,28 @@ export default function LeaveManagementPage({ session }: { session: any }) {
     }
   };
 
+  const handleCancelLeaveRequest = async (leaveId: string) => {
+    try {
+      setActionLoading(true);
+      const { error } = await supabase.from("leaves").delete().eq("id", leaveId);
+      if (error) {
+        const { error: updErr } = await supabase.from("leaves").update({ status: "cancelled" }).eq("id", leaveId);
+        if (updErr) throw updErr;
+      }
+      toast({ title: "Leave Request Withdrawn", description: "Your leave request has been cancelled." });
+      await loadData();
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "approved": return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-50 text-green-700 border border-green-200"><CheckCircle2 className="w-3 h-3 mr-1" /> Approved</span>;
       case "rejected": return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-50 text-red-700 border border-red-200"><XCircle className="w-3 h-3 mr-1" /> Rejected</span>;
+      case "cancelled": return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-100 text-gray-500 border border-gray-200"><XCircle className="w-3 h-3 mr-1" /> Cancelled</span>;
       default: return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-yellow-50 text-yellow-700 border border-yellow-200"><Clock className="w-3 h-3 mr-1" /> Pending</span>;
     }
   };
@@ -148,15 +171,21 @@ export default function LeaveManagementPage({ session }: { session: any }) {
     switch (status) {
       case "approved": return "border-l-green-500";
       case "rejected": return "border-l-red-500";
+      case "cancelled": return "border-l-gray-300 opacity-60";
       default: return "border-l-yellow-500";
     }
   };
 
   return (
     <div className="w-full max-w-lg mx-auto md:max-w-5xl px-5 pt-8 pb-24">
-      <div className="mb-8">
-        <h1 className="text-3xl font-black text-[#0a192f] tracking-tight mb-1.5">Leave Management</h1>
-        <p className="text-sm font-medium text-gray-500">Track and apply for leaves</p>
+      <div className="flex items-center justify-between mb-8 gap-4">
+        <div>
+          <h1 className="text-3xl font-black text-[#0a192f] tracking-tight mb-1.5">Leave Management</h1>
+          <p className="text-sm font-medium text-gray-500">Track and apply for leaves</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => navigate('/dashboard')} className="rounded-xl font-bold">
+          <ArrowLeft className="w-4 h-4 mr-1" /> Back
+        </Button>
       </div>
 
       <div className="mb-8 overflow-x-auto pb-2 -mx-5 px-5">
@@ -224,12 +253,29 @@ export default function LeaveManagementPage({ session }: { session: any }) {
                       {LEAVE_OPTIONS.find(l => l.key === leave.leave_type)?.label || leave.leave_type}
                     </span>
                     <span className="text-[11px] font-bold text-gray-500 bg-gray-100 px-2 py-1 rounded-md">
-                      {format(parseISO(leave.start_date), "MMM d")} - {format(parseISO(leave.end_date), "MMM d")}
+                      {safeFormatDate(leave.start_date, "MMM d")} - {safeFormatDate(leave.end_date, "MMM d")}
                     </span>
                   </div>
                   {getStatusBadge(leave.status)}
                 </div>
-                <p className="text-[13px] text-gray-500 font-medium truncate mt-0.5">{leave.reason}</p>
+                <div className="flex items-center justify-between mt-1 gap-2">
+                  <p className="text-[13px] text-gray-500 font-medium truncate flex-1">{leave.reason}</p>
+                  {leave.status === "pending" && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={actionLoading}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setLeaveToWithdraw(leave.id);
+                        setWithdrawDialogOpen(true);
+                      }}
+                      className="h-7 text-xs font-semibold text-red-600 hover:text-red-700 hover:bg-red-50 px-2 shrink-0"
+                    >
+                      Withdraw
+                    </Button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -337,6 +383,51 @@ export default function LeaveManagementPage({ session }: { session: any }) {
             <Button className="w-full mt-4 h-11 bg-gray-900 hover:bg-gray-800 text-white rounded-xl font-bold dark:bg-gray-700 dark:hover:bg-gray-600" onClick={() => setInsufficientError(null)}>
               Okay, I understand
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Withdraw Leave Themed Confirmation Dialog */}
+      <Dialog open={withdrawDialogOpen} onOpenChange={setWithdrawDialogOpen}>
+        <DialogContent className="sm:max-w-md max-w-[92%] rounded-3xl p-6 text-center shadow-2xl border border-gray-100 dark:border-slate-800 bg-white dark:bg-slate-900">
+          <div className="flex flex-col items-center justify-center pt-2">
+            <div className="w-16 h-16 rounded-2xl bg-red-50 dark:bg-red-950/40 text-red-600 flex items-center justify-center mb-4 shadow-sm">
+              <XCircle className="w-8 h-8" />
+            </div>
+
+            <DialogHeader className="text-center space-y-1.5">
+              <DialogTitle className="text-xl font-bold text-center text-[#0a192f] dark:text-white">
+                Withdraw Leave Request
+              </DialogTitle>
+              <DialogDescription className="text-center text-sm text-gray-500 dark:text-slate-400">
+                Are you sure you want to cancel and withdraw this pending leave request?
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="flex gap-3 w-full mt-6">
+              <Button
+                variant="outline"
+                onClick={() => setWithdrawDialogOpen(false)}
+                disabled={actionLoading}
+                className="flex-1 h-11 rounded-xl font-bold border-gray-200 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-800"
+              >
+                Keep Request
+              </Button>
+              <Button
+                onClick={async () => {
+                  if (leaveToWithdraw) {
+                    const id = leaveToWithdraw;
+                    setWithdrawDialogOpen(false);
+                    setLeaveToWithdraw(null);
+                    await handleCancelLeaveRequest(id);
+                  }
+                }}
+                disabled={actionLoading}
+                className="flex-1 h-11 rounded-xl font-bold text-white bg-red-600 hover:bg-red-700 shadow-lg shadow-red-600/25 active:scale-95 transition-all"
+              >
+                {actionLoading ? 'Cancelling…' : 'Yes, Withdraw'}
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

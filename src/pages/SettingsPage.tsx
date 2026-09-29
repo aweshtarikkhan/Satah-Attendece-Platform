@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { CalendarDays, User, HelpCircle, LogOut, ChevronRight, Download, FileText } from 'lucide-react';
+import { CalendarDays, User, HelpCircle, LogOut, ChevronRight, Download, FileText, ArrowLeft } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 
@@ -26,8 +27,11 @@ export default function SettingsPage({ session }: { session: any }) {
 
   return (
     <div className="w-full max-w-lg mx-auto md:max-w-3xl pb-4 px-4 pt-4">
-      <div className="mb-6">
+      <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Settings</h1>
+        <Button variant="outline" size="sm" onClick={() => navigate('/dashboard')} className="rounded-xl">
+          <ArrowLeft className="w-4 h-4 mr-1" /> Back
+        </Button>
       </div>
 
       <div className="space-y-4">

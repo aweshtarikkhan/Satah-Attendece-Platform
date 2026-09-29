@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RegularizeDialog } from '@/components/shared/RegularizeDialog';
+import { safeFormatTime } from '@/lib/utils';
 
 export default function Dashboard({ session }: { session: any }) {
   const [employee, setEmployee] = useState<any>(null);
@@ -36,6 +37,10 @@ export default function Dashboard({ session }: { session: any }) {
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   
+  // Clock In / Out Confirmation Modal
+  const [clockConfirmOpen, setClockConfirmOpen] = useState(false);
+  const [clockType, setClockType] = useState<'in' | 'out'>('in');
+
   // Regularize Modal
   const [regularizeOpen, setRegularizeOpen] = useState(false);
   const [selectedRegDate, setSelectedRegDate] = useState<string>('');
@@ -93,7 +98,7 @@ export default function Dashboard({ session }: { session: any }) {
           { data: monthLeavesData }
         ] = await Promise.all([
           supabase.from('attendances').select('*').eq('employee_id', empData.id).gte('date', start).lte('date', end),
-          supabase.from('attendances').select('*').eq('employee_id', empData.id).eq('date', todayStr).maybeSingle(),
+          supabase.from('attendances').select('*').eq('employee_id', empData.id).eq('date', todayStr).order('created_at', { ascending: false }).limit(1).maybeSingle(),
           supabase.from('holidays').select('*').eq('org_id', empData.org_id).gte('date', todayStr).order('date', { ascending: true }).limit(2),
           (supabase as any).from('employee_shifts').select('*, shifts(*)').eq('employee_id', empData.id).maybeSingle(),
           (supabase as any).from('employee_leave_balances').select('*').eq('employee_id', empData.id),
@@ -236,7 +241,6 @@ export default function Dashboard({ session }: { session: any }) {
 
   
   const handleCancelLeave = async (leaveId: string) => {
-    if (!window.confirm("Are you sure you want to cancel your leave for today? You will need to Check In after cancelling.")) return;
     try {
       setActionLoading(true);
       const { data: leaveReq } = await supabase.from('leaves').select('*').eq('id', leaveId).single();
@@ -275,10 +279,17 @@ export default function Dashboard({ session }: { session: any }) {
     }
   };
 
-  const handleClockInOut = async (type: 'in' | 'out') => {
-    const confirmMessage = type === 'in' ? "Are you sure you want to Clock In?" : "Are you sure you want to Clock Out?";
-    if (!window.confirm(confirmMessage)) return;
+  const requestClockInOut = (type: 'in' | 'out') => {
+    setClockType(type);
+    setClockConfirmOpen(true);
+  };
 
+  const executeClockInOut = async () => {
+    setClockConfirmOpen(false);
+    await handleClockInOut(clockType);
+  };
+
+  const handleClockInOut = async (type: 'in' | 'out') => {
     try {
       setActionLoading(true);
       const now = new Date().toISOString();
@@ -314,15 +325,26 @@ export default function Dashboard({ session }: { session: any }) {
       }
 
       if (type === 'in') {
-        const { error } = await supabase.from('attendances').upsert({
-          employee_id: employee.id,
-          org_id: employee.org_id,
-          date: today,
-          clock_in_time: now,
-          clock_in_location: locationData,
-          status: 'present'
-        }, { onConflict: 'employee_id,date' });
-        if (error) throw error;
+        let clockErr = null;
+        if (todayRecord?.id) {
+          const { error } = await supabase.from('attendances').update({
+            clock_in_time: now,
+            clock_in_location: locationData,
+            status: 'present'
+          }).eq('id', todayRecord.id);
+          clockErr = error;
+        } else {
+          const { error } = await supabase.from('attendances').upsert({
+            employee_id: employee.id,
+            org_id: employee.org_id,
+            date: today,
+            clock_in_time: now,
+            clock_in_location: locationData,
+            status: 'present'
+          }, { onConflict: 'employee_id,date' });
+          clockErr = error;
+        }
+        if (clockErr) throw clockErr;
         toast({ title: 'Clocked In', description: locationData ? 'Attendance marked with location.' : 'Attendance marked.' });
       } else {
         const { error } = await supabase.from('attendances').update({
@@ -473,7 +495,7 @@ export default function Dashboard({ session }: { session: any }) {
           <div>
             <h3 className="font-bold text-gray-900 dark:text-white text-base">Daily Attendance</h3>
             <p className="text-xs text-gray-500 dark:text-slate-400 mt-0.5">
-              {todayRecord?.clock_in_time ? `Clocked in at ${format(new Date(todayRecord.clock_in_time), "hh:mm a")}` : 'You have not clocked in yet.'}
+              {todayRecord?.clock_in_time ? `Clocked in at ${safeFormatTime(todayRecord.clock_in_time)}` : 'You have not clocked in yet.'}
             </p>
           </div>
           
@@ -481,7 +503,7 @@ export default function Dashboard({ session }: { session: any }) {
              <Button 
                size="lg" 
                className="h-12 rounded-xl bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/30 font-bold active:scale-95 transition-all"
-               onClick={() => handleClockInOut('in')}
+               onClick={() => requestClockInOut('in')}
                disabled={actionLoading}
              >
                <Fingerprint className="w-5 h-5 mr-2" /> Clock In
@@ -490,7 +512,7 @@ export default function Dashboard({ session }: { session: any }) {
              <Button 
                size="lg" 
                className="h-12 rounded-xl bg-[#0a192f] hover:bg-slate-800 text-white shadow-lg shadow-slate-900/30 font-bold active:scale-95 transition-all"
-               onClick={() => handleClockInOut('out')}
+               onClick={() => requestClockInOut('out')}
                disabled={actionLoading}
              >
                <MapPin className="w-5 h-5 mr-2" /> Clock Out
@@ -674,6 +696,58 @@ export default function Dashboard({ session }: { session: any }) {
               Update Password
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Clock In / Out Themed Confirmation Dialog */}
+      <Dialog open={clockConfirmOpen} onOpenChange={setClockConfirmOpen}>
+        <DialogContent className="sm:max-w-md max-w-[92%] rounded-3xl p-6 text-center shadow-2xl border border-gray-100 dark:border-slate-800 bg-white dark:bg-slate-900">
+          <div className="flex flex-col items-center justify-center pt-2">
+            <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mb-4 shadow-sm ${
+              clockType === 'in' 
+                ? 'bg-orange-50 dark:bg-orange-950/40 text-orange-600' 
+                : 'bg-slate-100 dark:bg-slate-800 text-[#0a192f] dark:text-white'
+            }`}>
+              {clockType === 'in' ? (
+                <Fingerprint className="w-8 h-8" />
+              ) : (
+                <MapPin className="w-8 h-8" />
+              )}
+            </div>
+
+            <DialogHeader className="text-center space-y-1.5">
+              <DialogTitle className="text-xl font-bold text-center text-gray-900 dark:text-white">
+                {clockType === 'in' ? 'Confirm Clock In' : 'Confirm Clock Out'}
+              </DialogTitle>
+              <DialogDescription className="text-center text-sm text-gray-500 dark:text-slate-400">
+                {clockType === 'in' 
+                  ? 'Are you ready to mark your attendance for today? Your live GPS location will be captured.' 
+                  : 'Are you sure you want to end your shift and clock out for today?'}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="flex gap-3 w-full mt-6">
+              <Button
+                variant="outline"
+                onClick={() => setClockConfirmOpen(false)}
+                disabled={actionLoading}
+                className="flex-1 h-11 rounded-xl font-bold border-gray-200 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-800"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={executeClockInOut}
+                disabled={actionLoading}
+                className={`flex-1 h-11 rounded-xl font-bold text-white shadow-lg active:scale-95 transition-all ${
+                  clockType === 'in'
+                    ? 'bg-orange-500 hover:bg-orange-600 shadow-orange-500/25'
+                    : 'bg-[#0a192f] hover:bg-slate-800 shadow-slate-900/25'
+                }`}
+              >
+                {actionLoading ? 'Processing…' : clockType === 'in' ? 'Yes, Clock In' : 'Yes, Clock Out'}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

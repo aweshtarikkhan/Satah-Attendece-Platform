@@ -51,11 +51,25 @@ export default function DashboardLayout() {
       if (!session) {
         navigate('/login');
       } else {
-        const { data: empData } = await supabase
+        let empData = null;
+        const { data: empDataList } = await supabase
           .from('employees')
           .select('*')
           .eq('auth_user_id', session.user.id)
-          .single();
+          .limit(1);
+        if (empDataList && empDataList.length > 0) {
+          empData = empDataList[0];
+        } else if (session.user?.email) {
+          const { data: empByEmail } = await supabase
+            .from('employees')
+            .select('*')
+            .ilike('email', session.user.email)
+            .limit(1);
+          if (empByEmail && empByEmail.length > 0) {
+            empData = empByEmail[0];
+            await supabase.from('employees').update({ auth_user_id: session.user.id }).eq('id', empData.id);
+          }
+        }
         if (empData) setEmployee(empData);
           
           if (empData) {
@@ -214,6 +228,27 @@ export default function DashboardLayout() {
   };
 
 
+  const playNotificationSound = () => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.08);
+      gain.gain.setValueAtTime(0.12, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.25);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.25);
+    } catch (e) {
+      // Audio autoplay policy
+    }
+  };
+
   useEffect(() => {
     if (!employee) return;
 
@@ -276,6 +311,9 @@ export default function DashboardLayout() {
             notifTitle = `New Message from ${senderName}`;
           }
           
+          // Audio chime
+          playNotificationSound();
+
           // Pop a toast notification
           toast({
             title: notifTitle,
@@ -329,7 +367,6 @@ export default function DashboardLayout() {
     };
   }, [employee]);
 
-  
   // Auto-clear leave notifications when visiting /leaves
   useEffect(() => {
     if (location.pathname === '/leaves' && employee) {
@@ -343,6 +380,69 @@ export default function DashboardLayout() {
     }
   }, [location.pathname, employee]);
 
+  // Auto-clear chat notifications when visiting /chat
+  useEffect(() => {
+    if (location.pathname === '/chat' && employee) {
+      setNotifications(prev => prev.filter(n => n.type !== 'chat'));
+      setUnreadChats(0);
+      supabase.from('chat_messages')
+        .update({ status: 'read' })
+        .eq('receiver_id', employee.id)
+        .eq('status', 'sent')
+        .then();
+    }
+  }, [location.pathname, employee]);
+
+  // Listen for custom 'chat-read' event to instantly clear badges
+  useEffect(() => {
+    const handleChatRead = () => {
+      setUnreadChats(0);
+      setNotifications(prev => prev.filter(n => n.type !== 'chat'));
+    };
+    window.addEventListener('chat-read', handleChatRead);
+    return () => window.removeEventListener('chat-read', handleChatRead);
+  }, []);
+
+  // Fast polling check for unread messages (every 4 seconds)
+  useEffect(() => {
+    if (!employee) return;
+    const pollUnread = async () => {
+      if (location.pathname === '/chat') return;
+      try {
+        const { data: unreadMsgs } = await supabase
+          .from('chat_messages')
+          .select('id, sender_id, message, created_at, sender:employees!sender_id(name)')
+          .eq('receiver_id', employee.id)
+          .eq('status', 'sent');
+
+        if (unreadMsgs && unreadMsgs.length > 0) {
+          setUnreadChats(unreadMsgs.length);
+          const chatNotifs = unreadMsgs.map((m: any) => ({
+            id: 'chat-' + m.id,
+            title: 'New Message from ' + (m.sender?.name || 'Someone'),
+            message: m.message || 'Sent a message',
+            is_read: false,
+            type: 'chat',
+            created_at: m.created_at
+          }));
+          setNotifications(prev => {
+            const nonChat = prev.filter(n => n.type !== 'chat');
+            const combined = [...chatNotifs, ...nonChat];
+            combined.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+            return combined.slice(0, 15);
+          });
+        } else {
+          setUnreadChats(0);
+          setNotifications(prev => prev.filter(n => n.type !== 'chat'));
+        }
+      } catch (err) {
+        // ignore
+      }
+    };
+    const timer = setInterval(pollUnread, 4000);
+    return () => clearInterval(timer);
+  }, [employee, location.pathname]);
+
   const unreadCount = notifications.filter(n => !n.is_read).length;
 
   const markAllAsRead = async () => {
@@ -351,8 +451,14 @@ export default function DashboardLayout() {
       .from('notifications')
       .update({ is_read: true }).eq('user_id', employee.auth_user_id)
       .eq('is_read', false);
+    await supabase
+      .from('chat_messages')
+      .update({ status: 'read' })
+      .eq('receiver_id', employee.id)
+      .eq('status', 'sent');
     setNotifications(notifications.map(n => ({ ...n, is_read: true })));
     setUnreadLeaves(0);
+    setUnreadChats(0);
   };
 
   const navItems = [
@@ -371,6 +477,13 @@ export default function DashboardLayout() {
     { name: 'Chat', icon: MessageCircle, path: '/chat' },
     { name: 'Settings', icon: Settings, path: '/settings' },
   ];
+
+  // Get dot indicator for nav items
+  const getNavDot = (itemName: string) => {
+    if (itemName === 'Leaves' && unreadLeaves > 0) return true;
+    if (itemName === 'Chat' && unreadChats > 0) return true;
+    return false;
+  };
   
   const sidebarContent = (
     <>
@@ -401,23 +514,38 @@ export default function DashboardLayout() {
       </NavLink>
 
       <nav className="flex-1 px-4 py-6 space-y-1.5 overflow-y-auto bg-[#0a192f]">
-        {sidebarNavItems.map((item) => (
-          <NavLink
-            key={item.name}
-            to={item.path}
-            onClick={() => setMobileMenuOpen(false)}
-            className={({ isActive }) =>
-              `flex items-center px-3 py-3 rounded-lg text-sm font-medium transition-all duration-200 ${
-                isActive
-                  ? 'bg-orange-500 text-white shadow-md shadow-orange-500/20'
-                  : 'text-blue-100 hover:bg-white/10'
-              }`
-            }
-          >
-            <item.icon className="w-5 h-5 mr-3 shrink-0" />
-            {item.name}
-          </NavLink>
-        ))}
+        {sidebarNavItems.map((item) => {
+          const hasDot = getNavDot(item.name);
+          return (
+            <NavLink
+              key={item.name}
+              to={item.path}
+              onClick={() => setMobileMenuOpen(false)}
+              className={({ isActive }) =>
+                `flex items-center justify-between px-3 py-3 rounded-lg text-sm font-medium transition-all duration-200 ${
+                  isActive
+                    ? 'bg-orange-500 text-white shadow-md shadow-orange-500/20'
+                    : 'text-blue-100 hover:bg-white/10'
+                }`
+              }
+            >
+              <div className="flex items-center">
+                <div className="relative mr-3 shrink-0">
+                  <item.icon className="w-5 h-5" />
+                  {hasDot && (
+                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-[#0a192f] animate-pulse" />
+                  )}
+                </div>
+                <span>{item.name}</span>
+              </div>
+              {hasDot && item.name === 'Chat' && unreadChats > 0 && (
+                <span className="flex h-5 min-w-[20px] px-1.5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white shadow-sm">
+                  {unreadChats}
+                </span>
+              )}
+            </NavLink>
+          );
+        })}
       </nav>
       
       <div className="p-4 border-t border-white/10 bg-[#0a192f]">
@@ -431,13 +559,6 @@ export default function DashboardLayout() {
       </div>
     </>
   );
-
-  // Get dot indicator for nav items
-  const getNavDot = (itemName: string) => {
-    if (itemName === 'Leaves' && unreadLeaves > 0) return true;
-    if (itemName === 'Chat' && unreadChats > 0) return true;
-    return false;
-  };
 
   return (
     <div className="flex h-[100dvh] w-full bg-gray-50 dark:bg-slate-900 overflow-hidden transition-colors">
@@ -509,7 +630,18 @@ export default function DashboardLayout() {
                   <h3 className="font-bold text-gray-900 dark:text-white">Notifications</h3>
                     <div className="flex items-center gap-2">
                       {notifications.length > 0 && (
-                        <button onClick={() => setNotifications([])} className="text-xs text-orange-600 dark:text-orange-400 hover:underline mr-2">
+                        <button 
+                          onClick={async () => {
+                            setNotifications([]);
+                            setUnreadChats(0);
+                            setUnreadLeaves(0);
+                            if (employee) {
+                              await supabase.from('notifications').update({ is_read: true }).eq('user_id', employee.auth_user_id);
+                              await supabase.from('chat_messages').update({ status: 'read' }).eq('receiver_id', employee.id).eq('status', 'sent');
+                            }
+                          }} 
+                          className="text-xs text-orange-600 dark:text-orange-400 hover:underline mr-2"
+                        >
                           Clear All
                         </button>
                       )}
@@ -526,15 +658,52 @@ export default function DashboardLayout() {
                   ) : (
                     <div className="divide-y divide-gray-100 dark:divide-slate-700/50">
                       {notifications.map(n => (
-                        <div key={n.id} className={`p-4 relative group ${!n.is_read ? 'bg-orange-50/50 dark:bg-orange-900/10' : ''}`}>
+                        <div 
+                          key={n.id} 
+                          onClick={async () => {
+                            setShowNotifications(false);
+                            setNotifications(prev => prev.filter(item => item.id !== n.id));
+                            if (n.type === 'chat') {
+                              setUnreadChats(0);
+                              if (String(n.id).startsWith('chat-')) {
+                                const rawMsgId = String(n.id).replace('chat-', '');
+                                await supabase.from('chat_messages').update({ status: 'read' }).eq('id', rawMsgId);
+                              } else {
+                                await supabase.from('notifications').update({ is_read: true }).eq('id', n.id);
+                              }
+                              navigate('/chat');
+                            } else {
+                              if (!String(n.id).startsWith('chat-')) {
+                                await supabase.from('notifications').update({ is_read: true }).eq('id', n.id);
+                              }
+                              if (n.type?.startsWith('leave')) {
+                                navigate('/leaves');
+                              }
+                            }
+                          }}
+                          className={`p-4 relative group transition-colors cursor-pointer hover:bg-orange-50/70 dark:hover:bg-slate-700/50 ${!n.is_read ? 'bg-orange-50/50 dark:bg-orange-900/10' : ''}`}
+                        >
                             <div className="pr-6">
                               <p className="text-sm font-bold text-gray-900 dark:text-white">{n.title}</p>
                               <p className="text-xs text-gray-600 dark:text-slate-300 mt-1">{n.message}</p>
                             </div>
                             <button 
-                              onClick={(e) => {
+                              onClick={async (e) => {
                                 e.stopPropagation();
                                 setNotifications(prev => prev.filter(item => item.id !== n.id));
+                                if (n.type === 'chat') {
+                                  setUnreadChats(prev => Math.max(0, prev - 1));
+                                  if (String(n.id).startsWith('chat-')) {
+                                    const rawMsgId = String(n.id).replace('chat-', '');
+                                    await supabase.from('chat_messages').update({ status: 'read' }).eq('id', rawMsgId);
+                                  } else {
+                                    await supabase.from('notifications').update({ is_read: true }).eq('id', n.id);
+                                  }
+                                } else {
+                                  if (!String(n.id).startsWith('chat-')) {
+                                    await supabase.from('notifications').update({ is_read: true }).eq('id', n.id);
+                                  }
+                                }
                               }}
                               className="absolute right-4 top-4 p-1 text-gray-400 hover:text-red-500 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
                               title="Clear notification"
@@ -609,7 +778,7 @@ export default function DashboardLayout() {
                   <div className="relative">
                     <item.icon className="w-6 h-6" />
                     {hasDot && (
-                      <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white dark:border-slate-900" />
+                      <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white dark:border-slate-900 animate-pulse" />
                     )}
                   </div>
                   <span className="text-[10px] font-medium">{item.name}</span>
