@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { format, parseISO } from 'date-fns';
-import { FileText, Eye, ExternalLink, Download, Upload, Loader2, FileCheck, Plus, ArrowLeft } from 'lucide-react';
+import { FileText, Eye, ExternalLink, Download, Upload, Loader2, FileCheck, Plus, ArrowLeft, Trash2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 const DOC_TYPES = ["Aadhaar", "PAN", "Offer Letter", "Appointment Letter", "Salary Slip", "Bank Proof", "Resume", "Other"];
@@ -23,6 +23,7 @@ export default function DocumentsPage({ session }: { session: any }) {
   const [docs, setDocs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [docType, setDocType] = useState('Other');
   const [file, setFile] = useState<File | null>(null);
   const [showUpload, setShowUpload] = useState(false);
@@ -33,6 +34,34 @@ export default function DocumentsPage({ session }: { session: any }) {
   const [viewerLoading, setViewerLoading] = useState(false);
 
   const { toast } = useToast();
+
+  const handleDelete = async (d: any) => {
+    if (!d?.id) return;
+    if (!window.confirm(`Are you sure you want to delete "${d.file_name || 'this document'}"?`)) return;
+    try {
+      setDeletingId(d.id);
+      if (d.file_path && !d.file_path.startsWith('http')) {
+        await supabase.storage.from('employee-documents').remove([d.file_path]);
+      }
+      const { error } = await (supabase as any)
+        .from('employee_documents')
+        .delete()
+        .eq('id', d.id);
+
+      if (error) throw error;
+
+      toast({ title: 'Document deleted successfully' });
+      if (viewerDoc?.id === d.id) {
+        setViewerDoc(null);
+        setViewerUrl('');
+      }
+      setDocs((prev) => prev.filter((item) => item.id !== d.id));
+    } catch (err: any) {
+      toast({ title: 'Failed to delete document', description: err.message, variant: 'destructive' });
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   const loadDocuments = async () => {
     try {
@@ -314,7 +343,7 @@ export default function DocumentsPage({ session }: { session: any }) {
                   </div>
                 </div>
 
-                {/* Actions: View, Open, Download */}
+                {/* Actions: View, Open, Download, Delete */}
                 <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-gray-100 dark:border-slate-700 w-full sm:w-auto justify-end">
                   <Button
                     size="sm"
@@ -340,6 +369,20 @@ export default function DocumentsPage({ session }: { session: any }) {
                   >
                     <Download className="w-3.5 h-3.5 mr-1" /> Download
                   </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => handleDelete(d)}
+                    disabled={deletingId === d.id}
+                    className="h-8 px-2.5 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/40 font-semibold"
+                  >
+                    {deletingId === d.id ? (
+                      <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-3.5 h-3.5 mr-1" />
+                    )}
+                    Delete
+                  </Button>
                 </div>
               </div>
             </Card>
@@ -363,6 +406,20 @@ export default function DocumentsPage({ session }: { session: any }) {
               </Button>
               <Button size="sm" onClick={() => handleDownload(viewerDoc)} className="h-8 text-xs bg-orange-500 hover:bg-orange-600 text-white">
                 <Download className="w-3.5 h-3.5 mr-1" /> Download
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => handleDelete(viewerDoc)}
+                disabled={deletingId === viewerDoc?.id}
+                className="h-8 text-xs text-red-600 border-red-200 hover:bg-red-50 dark:hover:bg-red-950/40"
+              >
+                {deletingId === viewerDoc?.id ? (
+                  <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                ) : (
+                  <Trash2 className="w-3.5 h-3.5 mr-1" />
+                )}
+                Delete
               </Button>
             </div>
           </DialogHeader>
