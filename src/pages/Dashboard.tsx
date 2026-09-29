@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
-import { format, startOfMonth, endOfMonth, parseISO, eachDayOfInterval, startOfWeek, endOfWeek, isSameMonth, isSameDay, subDays, subMonths } from 'date-fns';
+import { format, startOfMonth, endOfMonth, parseISO, eachDayOfInterval, startOfWeek, endOfWeek, isSameMonth, isSameDay, subDays, subMonths, addDays } from 'date-fns';
 import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
@@ -87,6 +87,13 @@ export default function Dashboard({ session }: { session: any }) {
         const start = format(startDate, 'yyyy-MM-dd');
         const end = format(endDate, 'yyyy-MM-dd');
 
+        // 1. Server-side auto clock-out trigger for expired punches (prior days / cutoff reached)
+        try {
+          await (supabase as any).rpc('auto_clock_out_expired_punches', { p_org_id: empData.org_id });
+        } catch (e) {
+          console.warn('RPC auto_clock_out_expired_punches not available or failed:', e);
+        }
+
         const [
           { data: monthData },
           { data: todayData },
@@ -124,8 +131,72 @@ export default function Dashboard({ session }: { session: any }) {
           }
         }
         setEmployeeShift(resolvedShift);
+
+        // 2. Client-side check for unclosed punch & auto-clockout cutoff (1 minute before shift start)
+        let activeRecord = todayData;
+        const { data: unclosedPunch } = await supabase
+          .from('attendances')
+          .select('*')
+          .eq('employee_id', empData.id)
+          .not('clock_in_time', 'is', null)
+          .is('clock_out_time', null)
+          .order('date', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (unclosedPunch) {
+          const shiftStartTime = resolvedShift?.start_time || '09:00:00';
+          const [sH, sM] = shiftStartTime.split(':').map(Number);
+          let cutoffH = sH;
+          let cutoffM = (sM || 0) - 1;
+          if (cutoffM < 0) {
+            cutoffM = 59;
+            cutoffH = (cutoffH - 1 + 24) % 24;
+          }
+
+          const punchDateObj = parseISO(unclosedPunch.date);
+          const nextDayObj = addDays(punchDateObj, 1);
+          const nextDayStr = format(nextDayObj, 'yyyy-MM-dd');
+          const cutoffDateTime = new Date(`${nextDayStr}T${String(cutoffH).padStart(2, '0')}:${String(cutoffM).padStart(2, '0')}:00`);
+
+          const currentTime = new Date();
+
+          if (currentTime >= cutoffDateTime) {
+            // Cutoff has passed! Auto clock out the record
+            const autoOutTimeIso = cutoffDateTime.toISOString();
+            const reasonStr = `Auto Clock Out at ${String(cutoffH).padStart(2, '0')}:${String(cutoffM).padStart(2, '0')}`;
+
+            await supabase.from('attendances').update({
+              clock_out_time: autoOutTimeIso,
+              is_auto_clock_out: true,
+              clock_out_location: {
+                auto: true,
+                is_auto_clock_out: true,
+                reason: reasonStr
+              }
+            }).eq('id', unclosedPunch.id);
+
+            await (supabase as any).from('attendance').update({
+              clock_out_time: autoOutTimeIso,
+              is_auto_clock_out: true,
+              hr_note: '[Auto Logout]'
+            }).eq('employee_id', empData.id).eq('attendance_date', unclosedPunch.date);
+
+            if (unclosedPunch.date === todayStr) {
+              activeRecord = {
+                ...unclosedPunch,
+                clock_out_time: autoOutTimeIso,
+                is_auto_clock_out: true
+              };
+            }
+          } else {
+            // Cutoff has not passed: User is still clocked in from this session
+            activeRecord = unclosedPunch;
+          }
+        }
+
         if (monthData) setMonthRecords(monthData);
-        if (todayData) setTodayRecord(todayData);
+        setTodayRecord(activeRecord);
         if (holsData) setUpcomingHolidays(holsData);
 
         const weeklyOffs = orgData?.weekly_offs || [0, 6];
@@ -205,6 +276,15 @@ export default function Dashboard({ session }: { session: any }) {
       if (dateFilter === 'custom' && (!customStart || !customEnd)) return;
       loadData();
     }
+  }, [session, dateFilter, customStart, customEnd]);
+
+  // Real-time ticker to auto-check cutoff (08:59 AM) while user has portal open
+  useEffect(() => {
+    if (!session) return;
+    const interval = setInterval(() => {
+      loadData();
+    }, 30000);
+    return () => clearInterval(interval);
   }, [session, dateFilter, customStart, customEnd]);
 
   // Fetch portal ads
@@ -325,8 +405,13 @@ export default function Dashboard({ session }: { session: any }) {
       }
 
       if (type === 'in') {
+        // Ensure any previous unclosed punches are auto closed before marking new punch
+        try {
+          await (supabase as any).rpc('auto_clock_out_expired_punches', { p_org_id: employee.org_id });
+        } catch (e) {}
+
         let clockErr = null;
-        if (todayRecord?.id) {
+        if (todayRecord?.id && todayRecord.date === today && !todayRecord.clock_out_time) {
           const { error } = await supabase.from('attendances').update({
             clock_in_time: now,
             clock_in_location: locationData,
@@ -495,11 +580,18 @@ export default function Dashboard({ session }: { session: any }) {
           <div>
             <h3 className="font-bold text-gray-900 dark:text-white text-base">Daily Attendance</h3>
             <p className="text-xs text-gray-500 dark:text-slate-400 mt-0.5">
-              {todayRecord?.clock_in_time ? `Clocked in at ${safeFormatTime(todayRecord.clock_in_time)}` : 'You have not clocked in yet.'}
+              {todayRecord?.clock_in_time 
+                ? `Clocked in at ${safeFormatTime(todayRecord.clock_in_time)}${todayRecord.date !== format(new Date(), 'yyyy-MM-dd') ? ` (${todayRecord.date})` : ''}` 
+                : 'You have not clocked in yet.'}
             </p>
+            {todayRecord?.clock_out_time && (todayRecord.is_auto_clock_out || todayRecord.clock_out_location?.auto || todayRecord.clock_out_location?.is_auto_clock_out) && (
+              <span className="inline-flex items-center gap-1 mt-1 text-[11px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded-lg border border-amber-200">
+                <AlertCircle className="w-3 h-3" /> Auto Logout ({safeFormatTime(todayRecord.clock_out_time)})
+              </span>
+            )}
           </div>
           
-          {!todayRecord ? (
+          {!todayRecord || (todayRecord.clock_out_time && todayRecord.date !== format(new Date(), 'yyyy-MM-dd')) ? (
              <Button 
                size="lg" 
                className="h-12 rounded-xl bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/30 font-bold active:scale-95 transition-all"
@@ -518,8 +610,13 @@ export default function Dashboard({ session }: { session: any }) {
                <MapPin className="w-5 h-5 mr-2" /> Clock Out
              </Button>
           ) : (
-            <div className="flex items-center gap-2 px-4 py-2 bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 rounded-xl font-bold text-sm">
-              <CheckCircle2 className="w-5 h-5" /> Completed
+            <div className="flex flex-col items-end">
+              <div className="flex items-center gap-2 px-4 py-2 bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 rounded-xl font-bold text-sm">
+                <CheckCircle2 className="w-5 h-5" /> Completed
+              </div>
+              {(todayRecord.is_auto_clock_out || todayRecord.clock_out_location?.auto || todayRecord.clock_out_location?.is_auto_clock_out) && (
+                <span className="text-[10px] text-amber-600 font-bold mt-1">Auto Logged Out</span>
+              )}
             </div>
           )}
         </div>

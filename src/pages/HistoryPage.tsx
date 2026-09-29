@@ -39,6 +39,11 @@ export default function HistoryPage({ session }: { session: any }) {
         const start = format(startOfMonth(currentMonth), 'yyyy-MM-dd');
         const end = format(endOfMonth(currentMonth), 'yyyy-MM-dd');
         
+        // Server-side auto clock-out trigger for expired punches
+        try {
+          await (supabase as any).rpc('auto_clock_out_expired_punches', { p_org_id: empData.org_id });
+        } catch (e) {}
+
         const [
           { data: monthData },
           { data: orgData },
@@ -421,9 +426,16 @@ export default function HistoryPage({ session }: { session: any }) {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-gray-700 dark:text-slate-200 font-medium">
                           {record.clock_out_time ? (
-                            <div className="flex items-center">
-                              <Clock className="w-3.5 h-3.5 mr-1.5 text-gray-400" />
-                              {format(new Date(record.clock_out_time), 'hh:mm a')}
+                            <div className="flex items-center gap-2">
+                              <div className="flex items-center">
+                                <Clock className="w-3.5 h-3.5 mr-1.5 text-gray-400" />
+                                {format(new Date(record.clock_out_time), 'hh:mm a')}
+                              </div>
+                              {(record.is_auto_clock_out || record.clock_out_location?.auto || record.clock_out_location?.is_auto_clock_out) && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-900/30 dark:text-amber-400">
+                                  Auto Logout
+                                </span>
+                              )}
                             </div>
                           ) : '-'}
                         </td>
@@ -497,10 +509,15 @@ export default function HistoryPage({ session }: { session: any }) {
                       {getStatusIcon(record.status)}
                       <span className="ml-1">{formatStatusLabel(record.status)}</span>
                     </div>
-                    <div className="flex items-center text-[10px] font-medium text-gray-600 dark:text-slate-300 gap-1.5">
+                    <div className="flex items-center text-[10px] font-medium text-gray-600 dark:text-slate-300 gap-1.5 flex-wrap justify-center">
                        <span>{record.clock_in_time ? format(new Date(record.clock_in_time), 'HH:mm') : '--:--'}</span>
                        <span className="text-gray-300 dark:text-slate-600">-</span>
                        <span>{record.clock_out_time ? format(new Date(record.clock_out_time), 'HH:mm') : '--:--'}</span>
+                       {(record.is_auto_clock_out || record.clock_out_location?.auto || record.clock_out_location?.is_auto_clock_out) && (
+                         <span className="text-[8px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-950/40 px-1 py-0.5 rounded border border-amber-200/50">
+                           Auto Logout
+                         </span>
+                       )}
                     </div>
                   </div>
                   
