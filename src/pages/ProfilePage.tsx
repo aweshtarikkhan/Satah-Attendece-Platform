@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { Mail, Lock, User, Phone, MapPin, Calendar, ShieldCheck, Key, Camera, Loader2, ArrowLeft } from 'lucide-react';
+import { resolveCurrentEmployee } from '@/lib/employee-utils';
 
 export default function ProfilePage() {
   const navigate = useNavigate();
@@ -45,11 +46,7 @@ export default function ProfilePage() {
       if (user) {
         setIsEmailVerified(!!user.email_confirmed_at);
         
-        const { data: empData } = await supabase
-          .from('employees')
-          .select('*')
-          .eq('auth_user_id', user.id)
-          .single();
+        const empData = await resolveCurrentEmployee(user);
           
         const displayEmail = (empData?.email || user.email || '').replace(/^attendance_/, '');
         setUserEmail(displayEmail);

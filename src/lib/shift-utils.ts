@@ -8,6 +8,7 @@ export function computeShiftStatus(
 ): 'present' | 'late' | 'half_day' | 'absent' {
   if (!clockInTime) return 'absent';
   const d = new Date(clockInTime);
+  // Use local time (not UTC) since shift times are defined in local timezone (IST)
   const clockInMins = d.getHours() * 60 + d.getMinutes();
 
   // If no shift is provided, default to standard office timings: 09:00 AM start, 15m grace (09:15), late up to 10:30, half day up to 14:00

@@ -5,6 +5,7 @@ import {  LayoutDashboard, History, CalendarDays, Umbrella, HelpCircle, Bell, Lo
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { format } from 'date-fns';
 import { useToast } from '@/hooks/use-toast';
+import { resolveCurrentEmployee, getCachedBusinessName, getCachedOrganization, getCachedEmployee, saveEmployeeCache } from '@/lib/employee-utils';
 import logoImg from '@/assets/logo.png';
 
 /**
@@ -12,33 +13,19 @@ import logoImg from '@/assets/logo.png';
  * Limits name to maximum 4 words AND maximum 40 characters (whichever is reached first)
  * and appends '...' gracefully so mobile top header never breaks or overflows.
  */
-function formatBusinessName(name?: string, maxWords = 4, maxChars = 40): string {
-  if (!name) return 'AassayBiz';
-  const trimmed = name.trim();
-  if (!trimmed) return 'AassayBiz';
+function formatBusinessName(name?: string, maxChars = 40): string {
+  const effective = (name || getCachedBusinessName() || '').trim();
+  if (!effective) return '';
 
-  let result = trimmed;
-  const words = trimmed.split(/\s+/);
-
-  // 1. Truncate by word count if exceeding maxWords
-  if (words.length > maxWords) {
-    result = words.slice(0, maxWords).join(' ') + '...';
+  if (effective.length > maxChars) {
+    return effective.slice(0, maxChars).trim() + '...';
   }
-
-  // 2. Truncate by character count if exceeding maxChars
-  const hasEllipsis = result.endsWith('...');
-  const baseText = hasEllipsis ? result.slice(0, -3).trim() : result;
-
-  if (baseText.length > maxChars) {
-    result = baseText.slice(0, maxChars).trim() + '...';
-  }
-
-  return result;
+  return effective;
 }
 
 export default function DashboardLayout() {
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [employee, setEmployee] = useState<any>(null);
+  const [employee, setEmployee] = useState<any>(() => getCachedEmployee());
   const [todayRecord, setTodayRecord] = useState<any>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const { toast } = useToast();
@@ -50,7 +37,8 @@ export default function DashboardLayout() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const [organization, setOrganization] = useState<any>(null);
+  const [organization, setOrganization] = useState<any>(() => getCachedOrganization());
+  const [businessName, setBusinessName] = useState<string>(() => getCachedBusinessName());
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -80,37 +68,26 @@ export default function DashboardLayout() {
       if (!session) {
         navigate('/login');
       } else {
-        let empData = null;
-        const { data: empDataList } = await supabase
-          .from('employees')
-          .select('*')
-          .eq('auth_user_id', session.user.id)
-          .limit(1);
-        if (empDataList && empDataList.length > 0) {
-          empData = empDataList[0];
-        } else if (session.user?.email) {
-          const { data: empByEmail } = await supabase
-            .from('employees')
-            .select('*')
-            .ilike('email', session.user.email)
-            .limit(1);
-          if (empByEmail && empByEmail.length > 0) {
-            empData = empByEmail[0];
-            await supabase.from('employees').update({ auth_user_id: session.user.id }).eq('id', empData.id);
-          }
-        }
-        if (empData) setEmployee(empData);
-          
-          if (empData) {
-            await fetchTodayRecord(empData);
-            
+        const empData = await resolveCurrentEmployee(session?.user);
+        if (empData) {
+          setEmployee(empData);
+          const resolvedOrg = empData.organization;
+          if (resolvedOrg?.name) {
+            setOrganization(resolvedOrg);
+            setBusinessName(resolvedOrg.name);
+          } else if (empData.org_id) {
             const { data: orgData } = await supabase
               .from('organizations')
               .select('*')
               .eq('id', empData.org_id)
               .maybeSingle();
-            if (orgData) setOrganization(orgData);
+            if (orgData) {
+              setOrganization(orgData);
+              setBusinessName(orgData.name || '');
+              saveEmployeeCache(empData, orgData);
+            }
           }
+        }
         
         if (empData) {
           const { data: notifs } = await supabase
@@ -235,10 +212,33 @@ export default function DashboardLayout() {
         toast({ title: 'Clocked In', description: locationData ? 'Attendance marked with location.' : 'Attendance marked.' });
         window.dispatchEvent(new Event('attendance_updated'));
       } else {
+        let punchId = todayRecord?.id;
+        if (!punchId) {
+          const { data: openPunch } = await supabase
+            .from('attendances')
+            .select('id')
+            .eq('employee_id', employee.id)
+            .not('clock_in_time', 'is', null)
+            .is('clock_out_time', null)
+            .order('date', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          punchId = openPunch?.id;
+        }
+
+        if (!punchId) {
+          toast({
+            title: 'No Active Clock-In Found',
+            description: 'Could not find an active clock-in session to clock out.',
+            variant: 'destructive',
+          });
+          return;
+        }
+
         const { error, data } = await supabase.from('attendances').update({
           clock_out_time: now,
           clock_out_location: locationData,
-        }).eq('id', todayRecord.id).select().single();
+        }).eq('id', punchId).select().maybeSingle();
         if (error) throw error;
         setTodayRecord(data);
         toast({ title: 'Clocked Out', description: locationData ? 'Clock-out saved with location.' : 'Your shift has ended.' });
@@ -602,17 +602,25 @@ export default function DashboardLayout() {
         <header className="h-14 bg-[#0a192f] flex items-center justify-between px-4 md:px-8 z-10 shrink-0 shadow-md">
           <div className="flex items-center min-w-0 mr-2 flex-1">
             {/* Mobile App Name (max 40 chars & max 4 words) */}
-            <div className="md:hidden flex items-center min-w-0" title={organization?.name || 'AassayBiz'}>
-              <div className="text-white font-bold text-base sm:text-lg tracking-wide capitalize truncate max-w-[220px] xs:max-w-[280px]">
-                {formatBusinessName(organization?.name)}
-              </div>
+            <div className="md:hidden flex items-center min-w-0" title={businessName || ''}>
+              {businessName ? (
+                <div className="text-white font-bold text-base sm:text-lg tracking-wide capitalize truncate max-w-[220px] xs:max-w-[280px]">
+                  {formatBusinessName(businessName)}
+                </div>
+              ) : (
+                <div className="h-5 w-32 bg-white/20 rounded-md animate-pulse" />
+              )}
             </div>
 
             {/* Desktop Title */}
-            <div className="hidden md:block text-sm text-white min-w-0" title={organization?.name || 'AassayBiz'}>
-              <div className="font-bold tracking-wide text-base capitalize truncate max-w-md">
-                {organization?.name || 'AassayBiz'}
-              </div>
+            <div className="hidden md:block text-sm text-white min-w-0" title={businessName || ''}>
+              {businessName ? (
+                <div className="font-bold tracking-wide text-base capitalize truncate max-w-md">
+                  {businessName}
+                </div>
+              ) : (
+                <div className="h-5 w-44 bg-white/20 rounded-md animate-pulse" />
+              )}
             </div>
           </div>
           

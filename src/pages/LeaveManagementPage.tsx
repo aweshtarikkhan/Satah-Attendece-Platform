@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { cn, safeFormatDate } from "@/lib/utils";
-
+import { resolveCurrentEmployee, getCachedEmployee } from "@/lib/employee-utils";
 
 const LEAVE_OPTIONS = [
   { key: "casual",    label: "Casual Leave" },
@@ -27,9 +27,9 @@ const LEAVE_OPTIONS = [
 
 export default function LeaveManagementPage({ session }: { session: any }) {
   const navigate = useNavigate();
-  const [employee, setEmployee] = useState<any>(null);
+  const [employee, setEmployee] = useState<any>(() => getCachedEmployee());
   const [leaves, setLeaves] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !getCachedEmployee());
   const [applyOpen, setApplyOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const { toast } = useToast();
@@ -53,24 +53,38 @@ export default function LeaveManagementPage({ session }: { session: any }) {
   const loadData = async () => {
     try {
       setLoading(true);
-      const { data: empData } = await supabase.from("employees").select("*").eq("auth_user_id", session.user.id).single();
+      const empData = await resolveCurrentEmployee(session?.user);
       if (empData) {
         setEmployee(empData);
-        const [leavesRes, balancesRes, policiesRes] = await Promise.all([
+        const [leavesRes, balancesRes, policiesRes, attRes] = await Promise.all([
           supabase.from("leaves").select("*").eq("employee_id", empData.id).order("created_at", { ascending: false }),
           (supabase as any).from("employee_leave_balances").select("*").eq("employee_id", empData.id),
           (supabase as any).from("leave_policies").select("*").eq("org_id", empData.org_id),
+          supabase.from("attendances").select("date, clock_in_time").eq("employee_id", empData.id).not("clock_in_time", "is", null)
         ]);
-        setLeaves(leavesRes.data || []);
+        
+        const leaves = leavesRes.data || [];
+        setLeaves(leaves);
+        const attendances = attRes.data || [];
+        const attSet = new Set(attendances.map(a => a.date));
+        const todayStr = format(new Date(), 'yyyy-MM-dd');
+
         const DEFAULT_ANNUAL: Record<string, number> = { casual: 12, sick: 5, el_pl: 0, comp_off: 0 };
         const ACCRUED_TYPES = ["el_pl", "comp_off"];
         const bmap: Record<string, { used: number; accrued: number; annual: number }> = {};
-        ["casual", "sick", "el_pl", "comp_off"].forEach((t) => {
+        
+        ["casual", "sick", "el_pl", "comp_off", "half_day", "wfh", "lwp"].forEach((t) => {
           const bal = (balancesRes.data || []).find((b: any) => b.leave_type === t);
           const pol = (policiesRes.data || []).find((p: any) => p.leave_type === t);
           const isAccrued = ACCRUED_TYPES.includes(t);
+          
+          // Calculate used dynamically: approved, start_date <= today, and no clock-in on start_date
+          const dynamicUsed = leaves
+            .filter(l => l.leave_type === t && l.status === 'approved' && l.start_date <= todayStr && !attSet.has(l.start_date))
+            .reduce((sum, l) => sum + (Number(l.days) || 1), 0);
+
           bmap[t] = {
-            used: bal?.used ?? 0,
+            used: dynamicUsed,
             accrued: bal?.accrued ?? 0,
             annual: isAccrued ? (bal?.accrued ?? 0) : (pol?.annual_limit ?? DEFAULT_ANNUAL[t] ?? 0),
           };

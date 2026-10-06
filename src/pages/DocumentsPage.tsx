@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { format, parseISO } from 'date-fns';
 import { FileText, Eye, ExternalLink, Download, Upload, Loader2, FileCheck, Plus, ArrowLeft, Trash2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { resolveCurrentEmployee, getCachedEmployee } from '@/lib/employee-utils';
 
 const DOC_TYPES = ["Aadhaar", "PAN", "Offer Letter", "Appointment Letter", "Salary Slip", "Bank Proof", "Resume", "Other"];
 
@@ -19,9 +20,9 @@ const isPdf = (name?: string) => /\.pdf$/i.test(name || "");
 
 export default function DocumentsPage({ session }: { session: any }) {
   const navigate = useNavigate();
-  const [employee, setEmployee] = useState<any>(null);
+  const [employee, setEmployee] = useState<any>(() => getCachedEmployee());
   const [docs, setDocs] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !getCachedEmployee());
   const [uploading, setUploading] = useState(false);
   const [deleteTargetDoc, setDeleteTargetDoc] = useState<any | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -67,11 +68,7 @@ export default function DocumentsPage({ session }: { session: any }) {
   const loadDocuments = async () => {
     try {
       setLoading(true);
-      const { data: empData } = await supabase
-        .from('employees')
-        .select('*')
-        .eq('auth_user_id', session.user.id)
-        .single();
+      const empData = await resolveCurrentEmployee(session?.user);
 
       if (empData) {
         setEmployee(empData);

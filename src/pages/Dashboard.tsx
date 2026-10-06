@@ -13,15 +13,44 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RegularizeDialog } from '@/components/shared/RegularizeDialog';
 import { safeFormatTime } from '@/lib/utils';
+import { resolveCurrentEmployee, getCachedEmployee } from '@/lib/employee-utils';
 
 export default function Dashboard({ session }: { session: any }) {
-  const [employee, setEmployee] = useState<any>(null);
-  const [stats, setStats] = useState({ present: 0, late: 0, absent: 0, half_day: 0, leaves_left: 15 });
-  const [upcomingHolidays, setUpcomingHolidays] = useState<any[]>([]);
-  const [todayRecord, setTodayRecord] = useState<any>(null);
-  const [employeeShift, setEmployeeShift] = useState<any>(null);
+  const [employee, setEmployee] = useState<any>(() => getCachedEmployee());
+  const [stats, setStats] = useState(() => {
+    try {
+      const raw = localStorage.getItem('attendance_stats');
+      return raw ? JSON.parse(raw) : { present: 0, late: 0, absent: 0, half_day: 0, leaves_left: 15 };
+    } catch {
+      return { present: 0, late: 0, absent: 0, half_day: 0, leaves_left: 15 };
+    }
+  });
+  const [upcomingHolidays, setUpcomingHolidays] = useState<any[]>(() => {
+    try {
+      const raw = localStorage.getItem('attendance_holidays');
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [todayRecord, setTodayRecord] = useState<any>(() => {
+    try {
+      const raw = localStorage.getItem('attendance_today_record');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [employeeShift, setEmployeeShift] = useState<any>(() => {
+    try {
+      const raw = localStorage.getItem('attendance_shift');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
   const [monthRecords, setMonthRecords] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !getCachedEmployee());
   const [approvedLeaveToday, setApprovedLeaveToday] = useState<any>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [dateFilter, setDateFilter] = useState('this_month');
@@ -50,11 +79,7 @@ export default function Dashboard({ session }: { session: any }) {
   const loadData = async () => {
     try {
       setLoading(true);
-      const { data: empData } = await supabase
-        .from('employees')
-        .select('*')
-        .eq('auth_user_id', session.user.id)
-        .single();
+      const empData = await resolveCurrentEmployee(session?.user);
 
       if (empData) {
         setEmployee(empData);
@@ -87,11 +112,13 @@ export default function Dashboard({ session }: { session: any }) {
         const start = format(startDate, 'yyyy-MM-dd');
         const end = format(endDate, 'yyyy-MM-dd');
 
-        // 1. Server-side auto clock-out trigger for expired punches (prior days / cutoff reached)
-        try {
-          await (supabase as any).rpc('auto_clock_out_expired_punches', { p_org_id: empData.org_id });
-        } catch (e) {
-          console.warn('RPC auto_clock_out_expired_punches not available or failed:', e);
+        // 1. Server-side auto clock-out trigger (isolated try/catch — never aborts stats load)
+        if (empData.org_id) {
+          try {
+            await supabase.rpc('auto_clock_out_expired_punches', { p_org_id: empData.org_id } as any);
+          } catch (_rpcErr) {
+            // Silently ignore — RPC may not exist yet; never abort main data load
+          }
         }
 
         const [
@@ -102,17 +129,33 @@ export default function Dashboard({ session }: { session: any }) {
           { data: leaveBalData },
           { data: orgData },
           { data: monthHolsData },
-          { data: monthLeavesData }
+          { data: monthLeavesData },
+          { data: allLeavesData },
+          { data: leavePoliciesData },
+          { data: allAttendancesData }
         ] = await Promise.all([
           supabase.from('attendances').select('*').eq('employee_id', empData.id).gte('date', start).lte('date', end),
           supabase.from('attendances').select('*').eq('employee_id', empData.id).eq('date', todayStr).order('created_at', { ascending: false }).limit(1).maybeSingle(),
           supabase.from('holidays').select('*').eq('org_id', empData.org_id).gte('date', todayStr).order('date', { ascending: true }).limit(2),
           (supabase as any).from('employee_shifts').select('*, shifts(*)').eq('employee_id', empData.id).maybeSingle(),
           (supabase as any).from('employee_leave_balances').select('*').eq('employee_id', empData.id),
-          supabase.from('organizations').select('weekly_offs').eq('id', empData.org_id).single(),
+          supabase.from('organizations').select('weekly_offs').eq('id', empData.org_id).maybeSingle(),
           supabase.from('holidays').select('*').eq('org_id', empData.org_id).gte('date', start).lte('date', end),
-          supabase.from('leaves').select('*').eq('employee_id', empData.id).eq('status', 'approved').lte('start_date', end).gte('end_date', start)
+          supabase.from('leaves').select('*').eq('employee_id', empData.id).eq('status', 'approved').lte('start_date', end).gte('end_date', start),
+          supabase.from('leaves').select('*').eq('employee_id', empData.id).eq('status', 'approved'),
+          (supabase as any).from('leave_policies').select('*').eq('org_id', empData.org_id),
+          supabase.from('attendances').select('date, clock_in_time').eq('employee_id', empData.id).not('clock_in_time', 'is', null)
         ]);
+
+        if (todayData) {
+          setTodayRecord(todayData);
+          try { localStorage.setItem('attendance_today_record', JSON.stringify(todayData)); } catch {}
+        }
+        if (monthData) setMonthRecords(monthData);
+        if (holsData) {
+          setUpcomingHolidays(holsData);
+          try { localStorage.setItem('attendance_holidays', JSON.stringify(holsData)); } catch {}
+        }
 
         let resolvedShift = shiftData?.shifts || null;
         const targetShiftId = shiftData?.shift_id || empData.shift_id;
@@ -166,21 +209,19 @@ export default function Dashboard({ session }: { session: any }) {
             const autoOutTimeIso = cutoffDateTime.toISOString();
             const reasonStr = `Auto Clock Out at ${String(cutoffH).padStart(2, '0')}:${String(cutoffM).padStart(2, '0')}`;
 
-            await supabase.from('attendances').update({
-              clock_out_time: autoOutTimeIso,
-              is_auto_clock_out: true,
-              clock_out_location: {
-                auto: true,
+            try {
+              await supabase.from('attendances').update({
+                clock_out_time: autoOutTimeIso,
                 is_auto_clock_out: true,
-                reason: reasonStr
-              }
-            }).eq('id', unclosedPunch.id);
-
-            await (supabase as any).from('attendance').update({
-              clock_out_time: autoOutTimeIso,
-              is_auto_clock_out: true,
-              hr_note: '[Auto Logout]'
-            }).eq('employee_id', empData.id).eq('attendance_date', unclosedPunch.date);
+                clock_out_location: {
+                  auto: true,
+                  is_auto_clock_out: true,
+                  reason: reasonStr
+                }
+              }).eq('id', unclosedPunch.id);
+            } catch (_autoErr) {
+              // Silently ignore auto-clockout update errors — never abort stats
+            }
 
             if (unclosedPunch.date === todayStr) {
               activeRecord = {
@@ -257,15 +298,40 @@ export default function Dashboard({ session }: { session: any }) {
           }
         });
 
+        const attendances = allAttendancesData || [];
+        const attSet = new Set(attendances.map(a => a.date));
+        const DEFAULT_ANNUAL: Record<string, number> = { casual: 12, sick: 5, el_pl: 0, comp_off: 0 };
+        const ACCRUED_TYPES = ["el_pl", "comp_off"];
+
         let leavesLeft = 0;
-        (leaveBalData || []).forEach(b => {
-          leavesLeft += Math.max(0, (b.annual_allowance || 0) - (b.used_amount || 0));
+        ["casual", "sick", "el_pl", "comp_off"].forEach((t) => {
+          const bal = (leaveBalData || []).find((b: any) => b.leave_type === t);
+          const pol = (leavePoliciesData || []).find((p: any) => p.leave_type === t);
+          const isAccrued = ACCRUED_TYPES.includes(t);
+          
+          const dynamicUsed = (allLeavesData || [])
+            .filter(l => l.leave_type === t && l.start_date <= todayStr && !attSet.has(l.start_date))
+            .reduce((sum, l) => sum + (Number(l.days) || 1), 0);
+
+          const annual = isAccrued ? (bal?.accrued ?? 0) : (pol?.annual_limit ?? DEFAULT_ANNUAL[t] ?? 0);
+          leavesLeft += Math.max(0, annual - dynamicUsed);
         });
 
-        setStats({ present: p, late: l, half_day: h, absent: a, leaves_left: leavesLeft });
+        const computedStats = { present: p, late: l, half_day: h, absent: a, leaves_left: leavesLeft };
+        setStats(computedStats);
+        try {
+          localStorage.setItem('attendance_stats', JSON.stringify(computedStats));
+          if (resolvedShift) {
+            localStorage.setItem('attendance_shift', JSON.stringify(resolvedShift));
+          }
+        } catch {}
       }
     } catch (err: any) {
-      toast({ title: 'Error', description: err.message, variant: 'destructive' });
+      console.error('Dashboard loadData error:', err);
+      // Only show toast for critical user-facing errors, not internal RPC/table errors
+      if (err?.message && !err.message.includes('rpc') && !err.message.includes('relation') && !err.message.includes('does not exist')) {
+        toast({ title: 'Error', description: err.message, variant: 'destructive' });
+      }
     } finally {
       setLoading(false);
     }
@@ -380,8 +446,38 @@ export default function Dashboard({ session }: { session: any }) {
   const handleClockInOut = async (type: 'in' | 'out') => {
     try {
       setActionLoading(true);
-      const now = new Date().toISOString();
-      const today = format(new Date(), 'yyyy-MM-dd');
+      let now = new Date().toISOString();
+      let today = format(new Date(), 'yyyy-MM-dd');
+      try {
+        const timeController = new AbortController();
+        const timeTimeoutId = setTimeout(() => timeController.abort(), 2000); // 2s timeout
+        const timeRes = await fetch('https://worldtimeapi.org/api/timezone/Asia/Kolkata', { signal: timeController.signal });
+        clearTimeout(timeTimeoutId);
+        if (timeRes.ok) {
+          const timeData = await timeRes.json();
+          now = timeData.datetime;
+          today = timeData.datetime.substring(0, 10);
+        }
+      } catch (e) {
+        console.warn("Real-time API failed, falling back to local time", e);
+      }
+
+      let currentEmp = employee;
+      if (!currentEmp) {
+        currentEmp = await resolveCurrentEmployee(session?.user);
+        if (currentEmp) {
+          setEmployee(currentEmp);
+        }
+      }
+
+      if (!currentEmp?.id) {
+        toast({
+          title: 'Employee Profile Missing',
+          description: 'Unable to find an employee profile linked to your account. Please contact your administrator.',
+          variant: 'destructive',
+        });
+        return;
+      }
       
       let locationData = null;
       try {
@@ -389,11 +485,11 @@ export default function Dashboard({ session }: { session: any }) {
           const position = await new Promise((resolve, reject) => {
             navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 10000, enableHighAccuracy: true });
           });
-          locationData = { lat: position.coords.latitude, lng: position.coords.longitude };
+          locationData = { lat: (position as any).coords.latitude, lng: (position as any).coords.longitude };
           try {
             const res = await fetch("https://nominatim.openstreetmap.org/reverse?lat=" + locationData.lat + "&lon=" + locationData.lng + "&format=json");
             const geo = await res.json();
-            if (geo?.display_name) locationData.address = geo.display_name;
+            if (geo?.display_name) (locationData as any).address = geo.display_name;
           } catch {}
         }
       } catch (err) { console.warn("GPS failed", err); }
@@ -414,9 +510,11 @@ export default function Dashboard({ session }: { session: any }) {
 
       if (type === 'in') {
         // Ensure any previous unclosed punches are auto closed before marking new punch
-        try {
-          await (supabase as any).rpc('auto_clock_out_expired_punches', { p_org_id: employee.org_id });
-        } catch (e) {}
+        if (currentEmp.org_id) {
+          try {
+            await (supabase as any).rpc('auto_clock_out_expired_punches', { p_org_id: currentEmp.org_id });
+          } catch (e) {}
+        }
 
         let clockErr = null;
         if (todayRecord?.id && todayRecord.date === today && !todayRecord.clock_out_time) {
@@ -428,8 +526,8 @@ export default function Dashboard({ session }: { session: any }) {
           clockErr = error;
         } else {
           const { error } = await supabase.from('attendances').upsert({
-            employee_id: employee.id,
-            org_id: employee.org_id,
+            employee_id: currentEmp.id,
+            org_id: currentEmp.org_id,
             date: today,
             clock_in_time: now,
             clock_in_location: locationData,
@@ -438,16 +536,58 @@ export default function Dashboard({ session }: { session: any }) {
           clockErr = error;
         }
         if (clockErr) throw clockErr;
+        const newRecord = {
+          id: todayRecord?.id,
+          employee_id: currentEmp.id,
+          org_id: currentEmp.org_id,
+          date: today,
+          clock_in_time: now,
+          clock_in_location: locationData,
+          status: 'present'
+        };
+        setTodayRecord(newRecord);
+        try { localStorage.setItem('attendance_today_record', JSON.stringify(newRecord)); } catch {}
         toast({ title: 'Clocked In', description: locationData ? 'Attendance marked with location.' : 'Attendance marked.' });
       } else {
+        let punchId = todayRecord?.id;
+        if (!punchId) {
+          const { data: openPunch } = await supabase
+            .from('attendances')
+            .select('id')
+            .eq('employee_id', currentEmp.id)
+            .not('clock_in_time', 'is', null)
+            .is('clock_out_time', null)
+            .order('date', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          punchId = openPunch?.id;
+        }
+
+        if (!punchId) {
+          toast({
+            title: 'No Active Clock-In Found',
+            description: 'Could not find an active clock-in session to clock out.',
+            variant: 'destructive',
+          });
+          return;
+        }
+
         const { error } = await supabase.from('attendances').update({
           clock_out_time: now,
           clock_out_location: locationData
-        }).eq('id', todayRecord.id);
+        }).eq('id', punchId);
         if (error) throw error;
+        const outRecord = {
+          ...(todayRecord || {}),
+          id: punchId,
+          clock_out_time: now,
+          clock_out_location: locationData
+        };
+        setTodayRecord(outRecord);
+        try { localStorage.setItem('attendance_today_record', JSON.stringify(outRecord)); } catch {}
         toast({ title: 'Clocked Out', description: locationData ? 'Clock-out saved with location.' : 'Your shift has ended.' });
       }
-      await loadData();
+      loadData();
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
     } finally {

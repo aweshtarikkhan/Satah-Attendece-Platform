@@ -6,24 +6,28 @@ import { Button } from '@/components/ui/button';
 import { format, parseISO } from 'date-fns';
 import { CalendarDays, MapPin, ArrowLeft } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { resolveCurrentEmployee } from '@/lib/employee-utils';
 
 export default function HolidaysPage({ session }: { session: any }) {
   const navigate = useNavigate();
-  const [holidays, setHolidays] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [holidays, setHolidays] = useState<any[]>(() => {
+    try {
+      const raw = localStorage.getItem('attendance_holidays');
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [loading, setLoading] = useState(() => !localStorage.getItem('attendance_holidays'));
   const { toast } = useToast();
 
   useEffect(() => {
     const loadHolidays = async () => {
       try {
-        setLoading(true);
-        const { data: empData } = await supabase
-          .from('employees')
-          .select('org_id')
-          .eq('auth_user_id', session.user.id)
-          .single();
+        if (!holidays.length) setLoading(true);
+        const empData = await resolveCurrentEmployee(session?.user);
 
-        if (empData) {
+        if (empData?.org_id) {
           const { data } = await supabase
             .from('holidays')
             .select('*')
@@ -31,6 +35,9 @@ export default function HolidaysPage({ session }: { session: any }) {
             .order('date', { ascending: true });
           
           setHolidays(data || []);
+          if (data) {
+            try { localStorage.setItem('attendance_holidays', JSON.stringify(data)); } catch {}
+          }
         }
       } catch (err: any) {
         toast({ title: 'Error', description: err.message, variant: 'destructive' });

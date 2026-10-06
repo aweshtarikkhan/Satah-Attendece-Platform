@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import { Building2, Eye, EyeOff } from 'lucide-react';
+import { resolveCurrentEmployee } from '@/lib/employee-utils';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -41,6 +42,13 @@ export default function Login() {
 
     if (error) {
       toast({ title: 'Login Failed', description: error.message, variant: 'destructive' });
+    } else if (data?.user) {
+      // Proactively ensure employee record is linked with auth_user_id
+      try {
+        await resolveCurrentEmployee(data.user);
+      } catch (linkErr) {
+        console.warn('Initial employee resolve error:', linkErr);
+      }
     }
     setLoading(false);
   };

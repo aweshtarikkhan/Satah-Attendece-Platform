@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
-import { format } from 'date-fns';
+import { format, isToday, isYesterday } from 'date-fns';
 import { Send, UserCircle2, Users, MessageSquare, Plus, Check, CheckCheck, UserPlus, X, ShieldAlert, Search, ChevronLeft, Phone, Video, Info, MessageCircle, Clock } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 
@@ -215,8 +215,8 @@ const [showMentions, setShowMentions] = React.useState(false);
       console.error('Error loading employees:', empErr);
     }
 
-    // Load Org Manager / Owner so employee can always chat with HR & Management without creating fake employee profile
-    let managerContact: any = null;
+    // Load all Org Members (HR/Admins) so employee can chat with them without a fake employee profile
+    let managerContacts: any[] = [];
     try {
       const { data: orgData } = await supabase
         .from('organizations')
@@ -224,46 +224,64 @@ const [showMentions, setShowMentions] = React.useState(false);
         .eq('id', employee.org_id)
         .maybeSingle();
 
-      let ownerId = orgData?.owner_id;
-      if (!ownerId) {
-        const { data: om } = await supabase
-          .from('organization_members')
-          .select('user_id')
-          .eq('org_id', employee.org_id)
-          .eq('role', 'owner')
-          .maybeSingle();
-        ownerId = om?.user_id;
+      const { data: orgMembers } = await supabase
+        .from('organization_members')
+        .select('user_id, role')
+        .eq('org_id', employee.org_id);
+
+      const memberIds = new Set<string>();
+      if (orgData?.owner_id) memberIds.add(orgData.owner_id);
+      if (orgMembers) {
+        orgMembers.forEach(m => {
+          if (m.user_id) memberIds.add(m.user_id);
+        });
       }
 
-      if (ownerId && ownerId !== employee.auth_user_id) {
-        const { data: prof } = await supabase
+      if (employee.auth_user_id) {
+        memberIds.delete(employee.auth_user_id);
+      }
+
+      if (memberIds.size > 0) {
+        const { data: profiles } = await supabase
           .from('profiles')
           .select('id, user_id, first_name, last_name, avatar_url')
-          .eq('user_id', ownerId)
-          .maybeSingle();
+          .in('user_id', Array.from(memberIds));
 
-        const managerName = prof?.first_name
-          ? `${prof.first_name} ${prof.last_name || ''}`.trim()
-          : (orgData?.email ? orgData.email.split('@')[0] : 'HR & Admin');
-
-        managerContact = {
-          id: ownerId,
-          name: managerName,
-          username: 'hr_admin',
-          designation: 'HR & Admin',
-          org_id: employee.org_id,
-          auth_user_id: ownerId,
-          avatar_url: prof?.avatar_url || null,
-          is_manager: true
-        };
+        if (profiles) {
+          managerContacts = profiles.map(prof => {
+            const mRole = orgMembers?.find(m => m.user_id === prof.user_id)?.role || 'member';
+            const fallbackName = orgData?.owner_id === prof.user_id && orgData?.email 
+              ? orgData.email.split('@')[0] 
+              : 'HR & Admin';
+            const managerName = prof.first_name
+              ? `${prof.first_name} ${prof.last_name || ''}`.trim()
+              : fallbackName;
+              
+            const empRecord = emps?.find(e => e.auth_user_id === prof.user_id);
+              
+            return {
+              id: empRecord ? empRecord.id : prof.user_id,
+              name: managerName,
+              username: `hr_admin_${prof.user_id.substring(0, 4)}`,
+              designation: mRole === 'owner' ? 'HR & Owner' : 'HR & Admin',
+              org_id: employee.org_id,
+              auth_user_id: prof.user_id,
+              avatar_url: prof.avatar_url || null,
+              is_manager: true
+            };
+          });
+        }
       }
     } catch (e) {
-      console.error('Error loading manager contact:', e);
+      console.error('Error loading manager contacts:', e);
     }
 
-    const allContacts = managerContact
-      ? [managerContact, ...(emps || []).filter(e => e.auth_user_id !== managerContact.id && e.id !== managerContact.id)]
-      : (emps || []);
+    const allContacts = [...managerContacts];
+    (emps || []).forEach(emp => {
+      if (!allContacts.some(c => c.id === emp.auth_user_id || c.id === emp.id)) {
+        allContacts.push(emp);
+      }
+    });
 
     setEmployeeList(allContacts);
 
@@ -351,14 +369,23 @@ const [showMentions, setShowMentions] = React.useState(false);
 
     const loadMessages = async (isInitial = false) => {
       try {
-        if (isInitial) setLoading(true);
+        if (isInitial) {
+          setMessages([]); // Clear stale messages immediately when switching conversations
+          setLoadingMessages(true);
+          setLoading(true);
+        }
         let query = supabase
           .from('chat_messages')
           .select('*')
           .order('created_at', { ascending: true });
 
         if (selectedType === 'dm' || selectedType === 'request') {
-          query = query.or(`and(sender_id.eq.${selectedTarget.id},receiver_id.eq.${employee.id}),and(sender_id.eq.${employee.id},receiver_id.eq.${selectedTarget.id})`);
+          const authId = selectedTarget.auth_user_id;
+          if (authId && authId !== selectedTarget.id) {
+            query = query.or(`and(sender_id.eq.${selectedTarget.id},receiver_id.eq.${employee.id}),and(sender_id.eq.${employee.id},receiver_id.eq.${selectedTarget.id}),and(sender_id.eq.${authId},receiver_id.eq.${employee.id}),and(sender_id.eq.${employee.id},receiver_id.eq.${authId})`);
+          } else {
+            query = query.or(`and(sender_id.eq.${selectedTarget.id},receiver_id.eq.${employee.id}),and(sender_id.eq.${employee.id},receiver_id.eq.${selectedTarget.id})`);
+          }
         } else if (selectedType === 'group') {
           query = query.eq('group_id', selectedTarget.id);
         }
@@ -401,6 +428,7 @@ const [showMentions, setShowMentions] = React.useState(false);
       } finally {
         if (isInitial && isSubscribed) {
           setLoading(false);
+          setLoadingMessages(false);
         }
       }
     };
@@ -429,13 +457,19 @@ const [showMentions, setShowMentions] = React.useState(false);
         { event: 'INSERT', schema: 'public', table: 'chat_messages' },
         async (payload) => {
           const msg = payload.new as any;
-          if (msg.sender_id === employee.id || msg.receiver_id === employee.id || msg.group_id) {
+          const isMyDM = msg.sender_id === employee.id || msg.receiver_id === employee.id;
+          const isMyGroup = msg.group_id && groupList.some((g: any) => g.id === msg.group_id);
+          if (isMyDM || isMyGroup) {
             const currentTarget = selectedTargetRef.current;
             const currentType = selectedTypeRef.current;
             let isRelevant = false;
 
             if ((currentType === 'dm' || currentType === 'request') && currentTarget) {
-              isRelevant = !msg.group_id && (msg.sender_id === currentTarget.id || msg.receiver_id === currentTarget.id);
+              const targetAuthId = currentTarget.auth_user_id;
+              isRelevant = !msg.group_id && (
+                msg.sender_id === currentTarget.id || msg.receiver_id === currentTarget.id ||
+                (targetAuthId && (msg.sender_id === targetAuthId || msg.receiver_id === targetAuthId))
+              );
             } else if (currentType === 'group' && currentTarget) {
               isRelevant = msg.group_id === currentTarget.id;
             }
@@ -1024,43 +1058,66 @@ const [showMentions, setShowMentions] = React.useState(false);
                     </div>
                     <p className="text-sm font-bold">Say hello to {selectedType === 'group' ? 'the group' : selectedTarget.name}!</p>
                   </div>
-                ) : (
-                  messages.map((msg, idx) => {
-                    const isMine = msg.sender_id === employee.id;
-                    const showSender = selectedType === 'group' && !isMine && (idx === 0 || messages[idx-1].sender_id !== msg.sender_id);
-                    
-                    return (
-                      <div key={msg.id} className={`flex flex-col ${isMine ? 'items-end' : 'items-start'}`}>
-                        {showSender && (
-                          <span className="text-[10px] font-bold text-gray-400 mb-1 ml-1 uppercase tracking-wider">@{msg.sender?.name}</span>
-                        )}
-                        <div
-                          className={`max-w-[85%] sm:max-w-[75%] px-4 py-3 rounded-2xl flex flex-col shadow-sm ${
-                            isMine
-                              ? 'bg-orange-500 text-white rounded-tr-sm'
-                              : 'bg-white dark:bg-slate-800 text-gray-800 dark:text-slate-200 border border-gray-100 dark:border-slate-700 rounded-tl-sm'
-                          }`}
-                        >
-                          <p className="text-sm whitespace-pre-wrap break-words font-medium">{msg.message}</p>
-                          
-                          {/* Read Receipts */}
-                          <div className={`flex items-center gap-1 self-end mt-1.5 ${isMine ? 'text-orange-100' : 'text-gray-400 dark:text-slate-500'}`}>
-                            <span className="text-[9px] font-bold">
-                              {format(new Date(msg.created_at), 'HH:mm')}
-                            </span>
-                            {isMine && (
-                              <>
-                                {msg.status === 'sent' && <Check className="w-3 h-3 opacity-70" />}
-                                {msg.status === 'delivered' && <CheckCheck className="w-3 h-3 opacity-70" />}
-                                {msg.status === 'read' && <CheckCheck className="w-3 h-3 text-[#0a192f]" />}
-                              </>
+                ) : (() => {
+                    let lastDateKey = '';
+                    return (messages || []).map((msg, idx) => {
+                      const isMine = msg.sender_id === employee.id;
+                      const showSender = selectedType === 'group' && !isMine && (idx === 0 || messages[idx-1].sender_id !== msg.sender_id);
+                      const msgDate = new Date(msg.created_at);
+                      const dateKey = format(msgDate, 'yyyy-MM-dd');
+                      const showDateSeparator = dateKey !== lastDateKey;
+                      if (showDateSeparator) lastDateKey = dateKey;
+
+                      const dateLabel = isToday(msgDate)
+                        ? 'Today'
+                        : isYesterday(msgDate)
+                        ? 'Yesterday'
+                        : format(msgDate, 'MMMM d, yyyy');
+
+                      return (
+                        <React.Fragment key={msg.id}>
+                          {showDateSeparator && (
+                            <div className="flex items-center gap-3 my-2">
+                              <div className="flex-1 h-px bg-gray-200 dark:bg-slate-700" />
+                              <span className="text-[10px] font-bold text-gray-400 dark:text-slate-500 uppercase tracking-wider whitespace-nowrap px-2">
+                                {dateLabel}
+                              </span>
+                              <div className="flex-1 h-px bg-gray-200 dark:bg-slate-700" />
+                            </div>
+                          )}
+                          <div className={`flex flex-col ${isMine ? 'items-end' : 'items-start'}`}>
+                            {showSender && (
+                              <span className="text-[10px] font-bold text-gray-400 mb-1 ml-1 uppercase tracking-wider">@{msg.sender?.name}</span>
                             )}
+                            <div
+                              className={`max-w-[85%] sm:max-w-[75%] px-4 py-3 rounded-2xl flex flex-col shadow-sm ${
+                                isMine
+                                  ? 'bg-orange-500 text-white rounded-tr-sm'
+                                  : 'bg-white dark:bg-slate-800 text-gray-800 dark:text-slate-200 border border-gray-100 dark:border-slate-700 rounded-tl-sm'
+                              }`}
+                            >
+                              <p className="text-sm whitespace-pre-wrap break-words font-medium">{msg.message}</p>
+                              
+                              {/* Read Receipts */}
+                              <div className={`flex items-center gap-1 self-end mt-1.5 ${isMine ? 'text-orange-100' : 'text-gray-400 dark:text-slate-500'}`}>
+                                <span className="text-[9px] font-bold">
+                                  {format(msgDate, 'HH:mm')}
+                                </span>
+                                {isMine && (
+                                  <>
+                                    {msg.status === 'sent' && <Check className="w-3 h-3 opacity-70" />}
+                                    {msg.status === 'delivered' && <CheckCheck className="w-3 h-3 opacity-70" />}
+                                    {msg.status === 'read' && <CheckCheck className="w-3 h-3 text-[#0a192f]" />}
+                                  </>
+                                )}
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
+                        </React.Fragment>
+                      );
+                    });
+                  })()
+                }
                 <div ref={messagesEndRef} />
               </div>
 

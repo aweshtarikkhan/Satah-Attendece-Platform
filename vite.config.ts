@@ -8,11 +8,15 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      workbox: {
+        skipWaiting: true,
+        clientsClaim: true,
+      },
       includeAssets: ['favicon.png', 'icon-192.png', 'icon-512.png'],
       manifest: {
-        name: "AassayBiz",
-        short_name: "AassayBiz",
-        description: "AassayBiz Attendance Portal",
+        name: "Attendance Portal",
+        short_name: "Attendance",
+        description: "Attendance Portal",
         theme_color: '#0a192f',
         background_color: '#0a192f',
         display: 'standalone',

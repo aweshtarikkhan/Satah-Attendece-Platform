@@ -8,15 +8,23 @@ import { ChevronLeft, ChevronRight, CheckCircle2, XCircle, AlertCircle, Clock, A
 import { useToast } from '@/hooks/use-toast';
 import { getEffectiveAttendanceStatus } from '@/lib/shift-utils';
 import { RegularizeDialog } from '@/components/shared/RegularizeDialog';
+import { resolveCurrentEmployee, getCachedEmployee } from '@/lib/employee-utils';
 
 export default function HistoryPage({ session }: { session: any }) {
   const navigate = useNavigate();
-  const [employee, setEmployee] = useState<any>(null);
+  const [employee, setEmployee] = useState<any>(() => getCachedEmployee());
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [records, setRecords] = useState<any[]>([]);
-  const [employeeShift, setEmployeeShift] = useState<any>(null);
+  const [employeeShift, setEmployeeShift] = useState<any>(() => {
+    try {
+      const r = localStorage.getItem('attendance_shift');
+      return r ? JSON.parse(r) : null;
+    } catch {
+      return null;
+    }
+  });
   const [regularizationsMap, setRegularizationsMap] = useState<Record<string, any>>({});
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !getCachedEmployee());
   const { toast } = useToast();
 
   // Dialog state
@@ -28,21 +36,19 @@ export default function HistoryPage({ session }: { session: any }) {
   const loadData = async () => {
     try {
       setLoading(true);
-      const { data: empData } = await supabase
-        .from('employees')
-        .select('*')
-        .eq('auth_user_id', session.user.id)
-        .single();
+      const empData = await resolveCurrentEmployee(session?.user);
 
       if (empData) {
         setEmployee(empData);
         const start = format(startOfMonth(currentMonth), 'yyyy-MM-dd');
         const end = format(endOfMonth(currentMonth), 'yyyy-MM-dd');
         
-        // Server-side auto clock-out trigger for expired punches
-        try {
-          await (supabase as any).rpc('auto_clock_out_expired_punches', { p_org_id: empData.org_id });
-        } catch (e) {}
+        // Server-side auto clock-out trigger (non-blocking in background)
+        if (empData.org_id) {
+          try {
+            await supabase.rpc('auto_clock_out_expired_punches', { p_org_id: empData.org_id } as any);
+          } catch (_rpcErr) { /* non-critical, ignore */ }
+        }
 
         const [
           { data: monthData },
@@ -188,7 +194,13 @@ export default function HistoryPage({ session }: { session: any }) {
         setRecords(fullRecords.reverse());
       }
     } catch (err: any) {
-      toast({ title: 'Error', description: err.message, variant: 'destructive' });
+      const msg = err?.message || '';
+      const isBenign = msg.includes('relation') || msg.includes('does not exist') || msg.includes('function') || msg.includes('rpc');
+      if (!isBenign) {
+        toast({ title: 'Error', description: msg, variant: 'destructive' });
+      } else {
+        console.error('[HistoryPage] loadData error:', msg);
+      }
     } finally {
       setLoading(false);
     }
