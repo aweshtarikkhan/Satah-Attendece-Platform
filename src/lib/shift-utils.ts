@@ -39,9 +39,12 @@ export function computeShiftStatus(
 
 export function getEffectiveAttendanceStatus(
   record: any,
-  shift: any
+  shift: any,
+  isRegularized: boolean = false
 ): 'present' | 'late' | 'half_day' | 'absent' | 'holiday' | 'approved_leave' | 'paid_leave' {
   if (!record) return 'absent';
+  if (isRegularized) return 'present';
+  
   if (record.status === 'holiday' || record.status === 'approved_leave' || record.status === 'paid_leave') {
     return record.status;
   }

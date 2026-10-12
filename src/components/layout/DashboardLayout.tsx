@@ -6,7 +6,11 @@ import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { format } from 'date-fns';
 import { useToast } from '@/hooks/use-toast';
 import { resolveCurrentEmployee, getCachedBusinessName, getCachedOrganization, getCachedEmployee, saveEmployeeCache } from '@/lib/employee-utils';
+import { captureAccurateLocation } from '@/lib/geo-utils';
 import logoImg from '@/assets/logo.png';
+
+
+
 
 /**
  * Format business/organization name for mobile display:
@@ -103,11 +107,29 @@ export default function DashboardLayout() {
 
           // Check for unread chat messages
             try {
-              const { data: unreadMsgs } = await supabase
+              const { data: myGroups } = await supabase
+                .from('chat_group_members')
+                .select('group_id')
+                .eq('employee_id', empData.id);
+              
+              const groupIds = myGroups?.map((g: any) => g.group_id) || [];
+              const groupFilter = groupIds.length > 0 ? `,group_id.in.(${groupIds.join(',')})` : '';
+
+              let query = supabase
                 .from('chat_messages')
                 .select('*, sender:employees!sender_id(name)')
-                .eq('receiver_id', empData.id)
-                .eq('status', 'sent');
+                .eq('status', 'sent')
+                .neq('sender_id', empData.id);
+                
+              if (groupIds.length > 0) {
+                query = query.or(`receiver_id.eq.${empData.id},group_id.in.(${groupIds.join(',')})`);
+              } else {
+                query = query.eq('receiver_id', empData.id);
+              }
+
+              const { data: unreadMsgs, error: unreadErr } = await query;
+                
+              console.log("Unread messages fetch result:", { unreadMsgs, unreadErr, empId: empData.id, groupIds });
                 
               if (unreadMsgs && unreadMsgs.length > 0) {
                  setUnreadChats(unreadMsgs.length);
@@ -128,6 +150,7 @@ export default function DashboardLayout() {
                  setUnreadChats(0);
               }
             } catch (err) {
+              console.error("Error fetching unread:", err);
               setUnreadChats(0);
             }
           }
@@ -147,56 +170,8 @@ export default function DashboardLayout() {
       const now = new Date().toISOString();
       const today = format(new Date(), 'yyyy-MM-dd');
 
-      // Capture GPS location with fallback
-      let locationData: { lat: number; lng: number; address?: string } | null = null;
-      try {
-        if (navigator.geolocation) {
-          const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-            navigator.geolocation.getCurrentPosition(resolve, reject, {
-              timeout: 10000,
-              enableHighAccuracy: true,
-              maximumAge: 0,
-            });
-          });
-          locationData = {
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-          };
-          // Try to reverse-geocode for address
-          try {
-            const res = await fetch(
-              `https://nominatim.openstreetmap.org/reverse?lat=${locationData.lat}&lon=${locationData.lng}&format=json`
-            );
-            const geo = await res.json();
-            if (geo?.display_name) locationData.address = geo.display_name;
-          } catch { /* ignore geocoding error */ }
-        } else {
-           throw new Error("Geolocation not supported by this browser");
-        }
-      } catch (err: any) { 
-        console.warn("GPS failed, trying IP fallback...", err);
-      }
-
-      // Fallback to IP geolocation if GPS failed
-      if (!locationData) {
-        try {
-          const ipRes = await fetch('https://ipapi.co/json/');
-          const ipGeo = await ipRes.json();
-          if (ipGeo && ipGeo.latitude && ipGeo.longitude) {
-            locationData = {
-              lat: ipGeo.latitude,
-              lng: ipGeo.longitude,
-              address: `${ipGeo.city || ''}, ${ipGeo.region || ''}, ${ipGeo.country_name || ''} (IP Based)`.replace(/^[,\s]+|[,\s]+$/g, '')
-            };
-          }
-        } catch (e) {
-          console.warn("IP Geolocation also failed", e);
-        }
-      }
-
-      if (!locationData) {
-        toast({ title: 'Location Warning', description: 'Could not detect location. Please enable GPS/Location permissions.', variant: 'destructive' });
-      }
+      // Capture GPS and IP fallback location
+      const locationData = await captureAccurateLocation();
 
       if (type === 'in') {
         const { error, data } = await supabase.from('attendances').upsert({
@@ -208,8 +183,26 @@ export default function DashboardLayout() {
           status: 'present'
         }, { onConflict: 'employee_id,date' }).select().single();
         if (error) throw error;
+
+        // Also sync to attendance (singular) table
+        try {
+          await (supabase as any).from('attendance').upsert({
+            employee_id: employee.id,
+            org_id: employee.org_id,
+            attendance_date: today,
+            clock_in_time: now,
+            clock_in_location: locationData,
+            status: 'present'
+          }, { onConflict: 'employee_id,attendance_date' });
+        } catch (syncErr) {
+          console.warn("Sync to attendance (singular) failed:", syncErr);
+        }
+
         setTodayRecord(data);
-        toast({ title: 'Clocked In', description: locationData ? 'Attendance marked with location.' : 'Attendance marked.' });
+        toast({ 
+          title: 'Clocked In', 
+          description: locationData?.address ? `Attendance marked: ${locationData.address}` : 'Attendance marked.' 
+        });
         window.dispatchEvent(new Event('attendance_updated'));
       } else {
         let punchId = todayRecord?.id;
@@ -240,8 +233,24 @@ export default function DashboardLayout() {
           clock_out_location: locationData,
         }).eq('id', punchId).select().maybeSingle();
         if (error) throw error;
+
+        // Also sync clock out to attendance (singular) table
+        try {
+          await (supabase as any).from('attendance').update({
+            clock_out_time: now,
+            clock_out_location: locationData,
+          })
+          .eq('employee_id', employee.id)
+          .eq('attendance_date', today);
+        } catch (syncErr) {
+          console.warn("Sync clock out to attendance (singular) failed:", syncErr);
+        }
+
         setTodayRecord(data);
-        toast({ title: 'Clocked Out', description: locationData ? 'Clock-out saved with location.' : 'Your shift has ended.' });
+        toast({ 
+          title: 'Clocked Out', 
+          description: locationData?.address ? `Clock-out saved: ${locationData.address}` : 'Your shift has ended.' 
+        });
         window.dispatchEvent(new Event('attendance_updated'));
       }
     } catch (err: any) {
@@ -411,15 +420,8 @@ export default function DashboardLayout() {
 
   // Auto-clear chat notifications when visiting /chat
   useEffect(() => {
-    if (location.pathname === '/chat' && employee) {
-      setNotifications(prev => prev.filter(n => n.type !== 'chat'));
-      setUnreadChats(0);
-      supabase.from('chat_messages')
-        .update({ status: 'read' })
-        .eq('receiver_id', employee.id)
-        .eq('status', 'sent')
-        .then();
-    }
+    // Only auto-clear when the user specifically opens a conversation, which fires the 'chat-read' event.
+    // We removed the aggressive location-based clearing here to keep the red dot on the Chat menu item.
   }, [location.pathname, employee]);
 
   // Listen for custom 'chat-read' event to instantly clear badges
@@ -436,13 +438,28 @@ export default function DashboardLayout() {
   useEffect(() => {
     if (!employee) return;
     const pollUnread = async () => {
-      if (location.pathname === '/chat') return;
+
       try {
-        const { data: unreadMsgs } = await supabase
+        const { data: myGroups } = await supabase
+          .from('chat_group_members')
+          .select('group_id')
+          .eq('employee_id', employee.id);
+        
+        const groupIds = myGroups?.map((g: any) => g.group_id) || [];
+
+        let query = supabase
           .from('chat_messages')
-          .select('id, sender_id, message, created_at, sender:employees!sender_id(name)')
-          .eq('receiver_id', employee.id)
-          .eq('status', 'sent');
+          .select('id, sender_id, message, created_at, sender:employees!sender_id(name), group_id')
+          .eq('status', 'sent')
+          .neq('sender_id', employee.id);
+
+        if (groupIds.length > 0) {
+          query = query.or(`receiver_id.eq.${employee.id},group_id.in.(${groupIds.join(',')})`);
+        } else {
+          query = query.eq('receiver_id', employee.id);
+        }
+
+        const { data: unreadMsgs } = await query;
 
         if (unreadMsgs && unreadMsgs.length > 0) {
           setUnreadChats(unreadMsgs.length);
@@ -465,7 +482,7 @@ export default function DashboardLayout() {
           setNotifications(prev => prev.filter(n => n.type !== 'chat'));
         }
       } catch (err) {
-        // ignore
+        console.error("Error polling unread:", err);
       }
     };
     const timer = setInterval(pollUnread, 4000);

@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { format, parseISO } from 'date-fns';
-import { FileText, Eye, ExternalLink, Download, Upload, Loader2, FileCheck, Plus, ArrowLeft, Trash2 } from 'lucide-react';
+import { FileText, Eye, ExternalLink, Download, Upload, Loader2, FileCheck, Plus, ArrowLeft } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { resolveCurrentEmployee, getCachedEmployee } from '@/lib/employee-utils';
 
@@ -24,8 +24,6 @@ export default function DocumentsPage({ session }: { session: any }) {
   const [docs, setDocs] = useState<any[]>([]);
   const [loading, setLoading] = useState(() => !getCachedEmployee());
   const [uploading, setUploading] = useState(false);
-  const [deleteTargetDoc, setDeleteTargetDoc] = useState<any | null>(null);
-  const [deleting, setDeleting] = useState(false);
   const [docType, setDocType] = useState('Other');
   const [file, setFile] = useState<File | null>(null);
   const [showUpload, setShowUpload] = useState(false);
@@ -36,34 +34,6 @@ export default function DocumentsPage({ session }: { session: any }) {
   const [viewerLoading, setViewerLoading] = useState(false);
 
   const { toast } = useToast();
-
-  const confirmDeleteDocument = async () => {
-    if (!deleteTargetDoc?.id) return;
-    try {
-      setDeleting(true);
-      if (deleteTargetDoc.file_path && !deleteTargetDoc.file_path.startsWith('http')) {
-        await supabase.storage.from('employee-documents').remove([deleteTargetDoc.file_path]);
-      }
-      const { error } = await (supabase as any)
-        .from('employee_documents')
-        .delete()
-        .eq('id', deleteTargetDoc.id);
-
-      if (error) throw error;
-
-      toast({ title: 'Document deleted successfully' });
-      if (viewerDoc?.id === deleteTargetDoc.id) {
-        setViewerDoc(null);
-        setViewerUrl('');
-      }
-      setDocs((prev) => prev.filter((item) => item.id !== deleteTargetDoc.id));
-      setDeleteTargetDoc(null);
-    } catch (err: any) {
-      toast({ title: 'Failed to delete document', description: err.message, variant: 'destructive' });
-    } finally {
-      setDeleting(false);
-    }
-  };
 
   const loadDocuments = async () => {
     try {
@@ -367,15 +337,6 @@ export default function DocumentsPage({ session }: { session: any }) {
                   >
                     <Download className="w-3.5 h-3.5 mr-1" /> Download
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setDeleteTargetDoc(d)}
-                    className="h-8 px-2.5 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/40 font-semibold"
-                  >
-                    <Trash2 className="w-3.5 h-3.5 mr-1" />
-                    Delete
-                  </Button>
                 </div>
               </div>
             </Card>
@@ -399,15 +360,6 @@ export default function DocumentsPage({ session }: { session: any }) {
               </Button>
               <Button size="sm" onClick={() => handleDownload(viewerDoc)} className="h-8 text-xs bg-orange-500 hover:bg-orange-600 text-white">
                 <Download className="w-3.5 h-3.5 mr-1" /> Download
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setDeleteTargetDoc(viewerDoc)}
-                className="h-8 text-xs text-red-600 border-red-200 hover:bg-red-50 dark:hover:bg-red-950/40"
-              >
-                <Trash2 className="w-3.5 h-3.5 mr-1" />
-                Delete
               </Button>
             </div>
           </DialogHeader>
@@ -438,67 +390,6 @@ export default function DocumentsPage({ session }: { session: any }) {
                 </div>
               </div>
             )}
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete Confirmation Modal (Proper Center + Website Themed) */}
-      <Dialog
-        open={!!deleteTargetDoc}
-        onOpenChange={(isOpen) => {
-          if (!isOpen && !deleting) setDeleteTargetDoc(null);
-        }}
-      >
-        <DialogContent className="w-[92vw] max-w-md p-6 bg-white dark:bg-slate-900 border border-gray-100 dark:border-slate-800 rounded-3xl shadow-2xl">
-          <div className="flex flex-col items-center text-center">
-            {/* Trash Icon Badge */}
-            <div className="w-14 h-14 rounded-2xl bg-red-50 dark:bg-red-950/50 text-red-600 dark:text-red-400 flex items-center justify-center mb-4 ring-8 ring-red-50/60 dark:ring-red-950/30">
-              <Trash2 className="w-7 h-7" />
-            </div>
-
-            <DialogHeader className="space-y-2 text-center sm:text-center">
-              <DialogTitle className="text-xl font-bold text-gray-900 dark:text-white">
-                Delete Document?
-              </DialogTitle>
-              <DialogDescription className="text-sm text-gray-500 dark:text-slate-400 max-w-xs sm:max-w-sm">
-                Are you sure you want to delete{' '}
-                <span className="font-semibold text-gray-800 dark:text-gray-200 break-all">
-                  &ldquo;{deleteTargetDoc?.file_name}&rdquo;
-                </span>
-                ? This action cannot be undone.
-              </DialogDescription>
-            </DialogHeader>
-
-            {/* Modal Actions */}
-            <div className="flex items-center gap-3 w-full mt-6">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setDeleteTargetDoc(null)}
-                disabled={deleting}
-                className="flex-1 rounded-xl h-11 border-gray-200 dark:border-slate-700 text-gray-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-slate-800 font-semibold"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                onClick={confirmDeleteDocument}
-                disabled={deleting}
-                className="flex-1 rounded-xl h-11 bg-red-600 hover:bg-red-700 text-white font-semibold shadow-md shadow-red-600/20 active:scale-[0.98] transition-all"
-              >
-                {deleting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Deleting...
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="w-4 h-4 mr-2" />
-                    Delete
-                  </>
-                )}
-              </Button>
-            </div>
           </div>
         </DialogContent>
       </Dialog>

@@ -23,3 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 *.tar.gz
+dist.zip
+lint_out.txt
+test*.mjs
+test*.cjs

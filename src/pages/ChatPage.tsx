@@ -305,10 +305,12 @@ const [showMentions, setShowMentions] = React.useState(false);
 
     // Load unread counts and recent message activity
     try {
+      const groupIds = (grps || []).map(g => g.id);
+      const groupFilter = groupIds.length > 0 ? `,group_id.in.(${groupIds.join(',')})` : '';
       const { data: recentMsgs } = await supabase
         .from('chat_messages')
         .select('id, sender_id, receiver_id, group_id, status, created_at')
-        .or(`receiver_id.eq.${employee.id},sender_id.eq.${employee.id}`)
+        .or(`receiver_id.eq.${employee.id},sender_id.eq.${employee.id}${groupFilter}`)
         .order('created_at', { ascending: false })
         .limit(300);
 
@@ -318,12 +320,15 @@ const [showMentions, setShowMentions] = React.useState(false);
         for (const m of recentMsgs) {
           const otherId = m.sender_id === employee.id ? m.receiver_id : m.sender_id;
           const targetKey = m.group_id || otherId;
+          if (!targetKey) continue;
+          
           const msgTime = new Date(m.created_at).getTime();
-          if (targetKey && (!lastTimes[targetKey] || msgTime > lastTimes[targetKey])) {
+          if (!lastTimes[targetKey] || msgTime > lastTimes[targetKey]) {
             lastTimes[targetKey] = msgTime;
           }
-          if (m.receiver_id === employee.id && m.status === 'sent') {
-            unreads[m.sender_id] = (unreads[m.sender_id] || 0) + 1;
+          
+          if (m.sender_id !== employee.id && m.status === 'sent') {
+            unreads[targetKey] = (unreads[targetKey] || 0) + 1;
           }
         }
         setUnreadMap(unreads);

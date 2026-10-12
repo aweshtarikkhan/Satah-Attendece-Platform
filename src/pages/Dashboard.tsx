@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label';
 import { RegularizeDialog } from '@/components/shared/RegularizeDialog';
 import { safeFormatTime } from '@/lib/utils';
 import { resolveCurrentEmployee, getCachedEmployee } from '@/lib/employee-utils';
+import { captureAccurateLocation } from '@/lib/geo-utils';
 
 export default function Dashboard({ session }: { session: any }) {
   const [employee, setEmployee] = useState<any>(() => getCachedEmployee());
@@ -52,6 +53,7 @@ export default function Dashboard({ session }: { session: any }) {
   const [monthRecords, setMonthRecords] = useState<any[]>([]);
   const [loading, setLoading] = useState(() => !getCachedEmployee());
   const [approvedLeaveToday, setApprovedLeaveToday] = useState<any>(null);
+  const [isTodayRegApproved, setIsTodayRegApproved] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [dateFilter, setDateFilter] = useState('this_month');
   const [customStart, setCustomStart] = useState('');
@@ -98,9 +100,6 @@ export default function Dashboard({ session }: { session: any }) {
         } else if (dateFilter === 'last_7_days') {
           startDate = subDays(now, 6); 
           endDate = now;
-        } else if (dateFilter === 'last_30_days') {
-          startDate = subDays(now, 29); 
-          endDate = now;
         } else if (dateFilter === 'custom' && customStart && customEnd) {
           startDate = parseISO(customStart);
           endDate = parseISO(customEnd);
@@ -132,7 +131,9 @@ export default function Dashboard({ session }: { session: any }) {
           { data: monthLeavesData },
           { data: allLeavesData },
           { data: leavePoliciesData },
-          { data: allAttendancesData }
+          { data: allAttendancesData },
+          { data: todayRegData },
+          { data: monthRegData }
         ] = await Promise.all([
           supabase.from('attendances').select('*').eq('employee_id', empData.id).gte('date', start).lte('date', end),
           supabase.from('attendances').select('*').eq('employee_id', empData.id).eq('date', todayStr).order('created_at', { ascending: false }).limit(1).maybeSingle(),
@@ -144,8 +145,13 @@ export default function Dashboard({ session }: { session: any }) {
           supabase.from('leaves').select('*').eq('employee_id', empData.id).eq('status', 'approved').lte('start_date', end).gte('end_date', start),
           supabase.from('leaves').select('*').eq('employee_id', empData.id).eq('status', 'approved'),
           (supabase as any).from('leave_policies').select('*').eq('org_id', empData.org_id),
-          supabase.from('attendances').select('date, clock_in_time').eq('employee_id', empData.id).not('clock_in_time', 'is', null)
+          supabase.from('attendances').select('date, clock_in_time').eq('employee_id', empData.id).not('clock_in_time', 'is', null),
+          supabase.from('attendance_regularizations').select('*').eq('employee_id', empData.id).eq('date', todayStr).maybeSingle(),
+          supabase.from('attendance_regularizations').select('*').eq('employee_id', empData.id).gte('date', start).lte('date', end)
         ]);
+
+        const isTodayRegApprovedLocal = todayRegData && todayRegData.status === 'approved';
+        setIsTodayRegApproved(isTodayRegApprovedLocal);
 
         if (todayData) {
           setTodayRecord(todayData);
@@ -247,6 +253,13 @@ export default function Dashboard({ session }: { session: any }) {
         const attMap: Record<string, any> = {};
         (monthData || []).forEach(r => { attMap[r.date] = r; });
 
+        const rMap: Record<string, any> = {};
+        (monthRegData || []).forEach(r => {
+          if (r.status === 'approved') {
+            rMap[r.date] = r;
+          }
+        });
+
         let dateInterval: Date[] = [];
         try {
           dateInterval = eachDayOfInterval({ start: startDate, end: endDate });
@@ -277,7 +290,8 @@ export default function Dashboard({ session }: { session: any }) {
           }
 
           if (existing) {
-            const status = getEffectiveAttendanceStatus(existing, resolvedShift);
+            const isReg = !!rMap[ds];
+            const status = getEffectiveAttendanceStatus(existing, resolvedShift, isReg);
             if (status === 'present') p++;
             else if (status === 'late') l++;
             else if (status === 'half_day' || status === 'half-day') h++;
@@ -479,34 +493,8 @@ export default function Dashboard({ session }: { session: any }) {
         return;
       }
       
-      let locationData = null;
-      try {
-        if (navigator.geolocation) {
-          const position = await new Promise((resolve, reject) => {
-            navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 10000, enableHighAccuracy: true });
-          });
-          locationData = { lat: (position as any).coords.latitude, lng: (position as any).coords.longitude };
-          try {
-            const res = await fetch("https://nominatim.openstreetmap.org/reverse?lat=" + locationData.lat + "&lon=" + locationData.lng + "&format=json");
-            const geo = await res.json();
-            if (geo?.display_name) (locationData as any).address = geo.display_name;
-          } catch {}
-        }
-      } catch (err) { console.warn("GPS failed", err); }
-
-      if (!locationData) {
-        try {
-          const ipRes = await fetch('https://ipapi.co/json/');
-          const ipGeo = await ipRes.json();
-          if (ipGeo && ipGeo.latitude && ipGeo.longitude) {
-            locationData = { lat: ipGeo.latitude, lng: ipGeo.longitude, address: (ipGeo.city + ', ' + ipGeo.region + ' (IP)').replace(/^[\s,]+|[\s,]+$/g, '') };
-          }
-        } catch (e) { console.warn("IP failed", e); }
-      }
-
-      if (!locationData) {
-        toast({ title: 'Location Warning', description: 'Could not detect location.', variant: 'destructive' });
-      }
+      // Capture location accurately with GPS and IP fallbacks
+      const locationData = await captureAccurateLocation();
 
       if (type === 'in') {
         // Ensure any previous unclosed punches are auto closed before marking new punch
@@ -516,28 +504,7 @@ export default function Dashboard({ session }: { session: any }) {
           } catch (e) {}
         }
 
-        let clockErr = null;
-        if (todayRecord?.id && todayRecord.date === today && !todayRecord.clock_out_time) {
-          const { error } = await supabase.from('attendances').update({
-            clock_in_time: now,
-            clock_in_location: locationData,
-            status: 'present'
-          }).eq('id', todayRecord.id);
-          clockErr = error;
-        } else {
-          const { error } = await supabase.from('attendances').upsert({
-            employee_id: currentEmp.id,
-            org_id: currentEmp.org_id,
-            date: today,
-            clock_in_time: now,
-            clock_in_location: locationData,
-            status: 'present'
-          }, { onConflict: 'employee_id,date' });
-          clockErr = error;
-        }
-        if (clockErr) throw clockErr;
-        const newRecord = {
-          id: todayRecord?.id,
+        const punchPayload = {
           employee_id: currentEmp.id,
           org_id: currentEmp.org_id,
           date: today,
@@ -545,9 +512,36 @@ export default function Dashboard({ session }: { session: any }) {
           clock_in_location: locationData,
           status: 'present'
         };
-        setTodayRecord(newRecord);
-        try { localStorage.setItem('attendance_today_record', JSON.stringify(newRecord)); } catch {}
-        toast({ title: 'Clocked In', description: locationData ? 'Attendance marked with location.' : 'Attendance marked.' });
+
+        const { data: savedRecord, error: clockErr } = await supabase
+          .from('attendances')
+          .upsert(punchPayload, { onConflict: 'employee_id,date' })
+          .select()
+          .single();
+
+        if (clockErr) throw clockErr;
+
+        // Also sync to attendance (singular) table so both tables stay 100% aligned
+        try {
+          await (supabase as any).from('attendance').upsert({
+            employee_id: currentEmp.id,
+            org_id: currentEmp.org_id,
+            attendance_date: today,
+            clock_in_time: now,
+            clock_in_location: locationData,
+            status: 'present'
+          }, { onConflict: 'employee_id,attendance_date' });
+        } catch (syncErr) {
+          console.warn("Sync to attendance (singular) failed:", syncErr);
+        }
+
+        setTodayRecord(savedRecord);
+        try { localStorage.setItem('attendance_today_record', JSON.stringify(savedRecord)); } catch {}
+        toast({ 
+          title: 'Clocked In', 
+          description: locationData?.address ? `Attendance marked: ${locationData.address}` : 'Attendance marked.' 
+        });
+        window.dispatchEvent(new Event('attendance_updated'));
       } else {
         let punchId = todayRecord?.id;
         if (!punchId) {
@@ -572,20 +566,37 @@ export default function Dashboard({ session }: { session: any }) {
           return;
         }
 
-        const { error } = await supabase.from('attendances').update({
-          clock_out_time: now,
-          clock_out_location: locationData
-        }).eq('id', punchId);
-        if (error) throw error;
-        const outRecord = {
-          ...(todayRecord || {}),
-          id: punchId,
-          clock_out_time: now,
-          clock_out_location: locationData
-        };
-        setTodayRecord(outRecord);
-        try { localStorage.setItem('attendance_today_record', JSON.stringify(outRecord)); } catch {}
-        toast({ title: 'Clocked Out', description: locationData ? 'Clock-out saved with location.' : 'Your shift has ended.' });
+        const { data: updatedRecord, error: outErr } = await supabase
+          .from('attendances')
+          .update({
+            clock_out_time: now,
+            clock_out_location: locationData
+          })
+          .eq('id', punchId)
+          .select()
+          .single();
+
+        if (outErr) throw outErr;
+
+        // Also sync clock out to attendance (singular) table
+        try {
+          await (supabase as any).from('attendance').update({
+            clock_out_time: now,
+            clock_out_location: locationData
+          })
+          .eq('employee_id', currentEmp.id)
+          .eq('attendance_date', today);
+        } catch (syncErr) {
+          console.warn("Sync clock out to attendance (singular) failed:", syncErr);
+        }
+
+        setTodayRecord(updatedRecord);
+        try { localStorage.setItem('attendance_today_record', JSON.stringify(updatedRecord)); } catch {}
+        toast({ 
+          title: 'Clocked Out', 
+          description: locationData?.address ? `Clock-out saved: ${locationData.address}` : 'Your shift has ended.' 
+        });
+        window.dispatchEvent(new Event('attendance_updated'));
       }
       loadData();
     } catch (err: any) {
@@ -616,7 +627,7 @@ export default function Dashboard({ session }: { session: any }) {
     </svg>
   );
 
-  const todayEffectiveStatus = todayRecord ? getEffectiveAttendanceStatus(todayRecord, employeeShift) : null;
+  const todayEffectiveStatus = todayRecord ? getEffectiveAttendanceStatus(todayRecord, employeeShift, isTodayRegApproved) : null;
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -781,7 +792,6 @@ export default function Dashboard({ session }: { session: any }) {
                 <SelectItem value="this_month">This Month</SelectItem>
                 <SelectItem value="last_month">Last Month</SelectItem>
                 <SelectItem value="last_7_days">Last 7 Days</SelectItem>
-                <SelectItem value="last_30_days">Last 30 Days</SelectItem>
                 <SelectItem value="custom">Custom Dates</SelectItem>
               </SelectContent>
             </Select>

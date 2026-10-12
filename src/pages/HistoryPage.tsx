@@ -152,7 +152,9 @@ export default function HistoryPage({ session }: { session: any }) {
             };
           }
           if (existing) {
-            const calculatedStatus = getEffectiveAttendanceStatus(existing, shift);
+            const reg = rMap[ds];
+            const isApprovedReg = reg && reg.status === 'approved';
+            const calculatedStatus = getEffectiveAttendanceStatus(existing, shift, isApprovedReg);
             return {
               ...existing,
               status: existing.status && existing.status !== 'present' ? existing.status : calculatedStatus
